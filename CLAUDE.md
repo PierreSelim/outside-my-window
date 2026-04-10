@@ -3,6 +3,14 @@
 ## Project spec
 Keep `SPEC.md` up to date as decisions are made. Any time a new architectural choice, data finding, dependency, or structural change is agreed upon, update the relevant section of `SPEC.md` before moving on.
 
+## Testing
+Every new module or function added to `src/` must be covered by unit tests in `tests/`:
+
+- Use pytest with plain functions (no `TestCase`)
+- Use fixtures in `conftest.py` for shared test data (e.g. `sample_df`)
+- Mock network calls — tests must never hit the network
+- Run with coverage: `uv run pytest tests/ --cov=src --cov-report=term-missing`
+
 ## Python coding standards
 Write Python code to a senior developer standard:
 

@@ -34,12 +34,14 @@ def _series(df: pl.DataFrame, col: str) -> tuple[list, list]:
 # ---------------------------------------------------------------------------
 
 
-def temperature_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
+def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: str = "") -> go.Figure:
     """Line chart: TN/TX shaded band + TM mean line."""
     fig = go.Figure()
 
-    dates_min, temp_min = _series(df, "temp_min")
-    dates_max, temp_max = _series(df, "temp_max")
+    # Filter jointly so both band traces cover identical dates
+    df_band = df.filter(pl.col("temp_min").is_not_null() & pl.col("temp_max").is_not_null())
+    dates_min, temp_min = df_band["DATE"].to_list(), df_band["temp_min"].to_list()
+    dates_max, temp_max = df_band["DATE"].to_list(), df_band["temp_max"].to_list()
 
     # temp_max upper bound of the band
     fig.add_trace(
@@ -79,7 +81,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
         )
 
     fig.update_layout(
-        title=f"Temperature — {station_name}",
+        title=f"Temperature — {station_name}{granularity_label}",
         yaxis_title="°C",
         legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
         hovermode="x unified",
@@ -88,7 +90,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
     return fig
 
 
-def precipitation_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
+def precipitation_figure(df: pl.DataFrame, station_name: str, granularity_label: str = "") -> go.Figure:
     """Bar chart: daily precipitation."""
     dates, precip = _series(df, "precipitation")
 
@@ -102,7 +104,7 @@ def precipitation_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
         )
     )
     fig.update_layout(
-        title=f"Precipitation — {station_name}",
+        title=f"Precipitation — {station_name}{granularity_label}",
         yaxis_title="mm",
         bargap=0,
         hovermode="x unified",
@@ -111,7 +113,7 @@ def precipitation_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
     return fig
 
 
-def wind_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
+def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = "") -> go.Figure:
     """Line chart: FFM mean wind speed and FXY max gust."""
     fig = go.Figure()
 
@@ -144,7 +146,7 @@ def wind_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
 
     no_data = not has_mean and not has_gust
     fig.update_layout(
-        title=f"Wind — {station_name}" + (" (no data for this station)" if no_data else ""),
+        title=f"Wind — {station_name}{granularity_label}" + (" (no data for this station)" if no_data else ""),
         yaxis_title="m/s",
         legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
         hovermode="x unified",

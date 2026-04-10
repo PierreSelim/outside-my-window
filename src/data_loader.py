@@ -8,18 +8,20 @@ import polars as pl
 import requests
 
 BASE_URL = "https://object.files.data.gouv.fr/meteofrance/data/synchro_ftp/BASE/QUOT"
-CACHE_DIR = Path("data/cache")
+CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
 
 # Columns we actually need for visualisation — the raw files have 60 columns
 KEEP_COLS: list[str] = [
     "NUM_POSTE", "NOM_USUEL", "LAT", "LON", "ALTI", "AAAAMMJJ",
-    "RR", "TN", "TX", "TM", "TAMPLI", "FFM", "FXY", "DXY",
+    "RR", "TN", "TX", "TM", "TAMPLI", "FFM", "FXY",
 ]
 
 # Mapping from raw dataset column names to human-readable equivalents
 COLUMN_RENAME: dict[str, str] = {
     "NUM_POSTE": "station_id",
     "NOM_USUEL": "station_name",
+    "LAT":       "lat",
+    "LON":       "lon",
     "ALTI":      "altitude",
     "TN":        "temp_min",
     "TX":        "temp_max",
@@ -28,7 +30,6 @@ COLUMN_RENAME: dict[str, str] = {
     "RR":        "precipitation",
     "FFM":       "wind_mean",
     "FXY":       "wind_gust",
-    "DXY":       "wind_gust_dir",
 }
 
 
@@ -38,13 +39,36 @@ class Period(str, Enum):
     LATEST = "latest-2025-2026"
 
 
+class Granularity(str, Enum):
+    DAY = "day"
+    WEEK = "week"
+    MONTH = "month"
+
+    @property
+    def truncate_expr(self) -> str | None:
+        """Polars truncate string for group_by_dynamic, or None for DAY (identity)."""
+        return {"week": "1w", "month": "1mo"}.get(self.value)
+
+    @property
+    def title_suffix(self) -> str:
+        """Label appended to chart titles when not daily."""
+        return {"week": " (weekly avg)", "month": " (monthly avg)"}.get(self.value, "")
+
+
 @dataclass(frozen=True)
 class Station:
-    num_poste: int
+    station_id: int
     name: str
     lat: float
     lon: float
     altitude: int
+
+
+_NUMERIC_COLS: list[str] = [
+    "temp_min", "temp_max", "temp_mean", "temp_amplitude",
+    "precipitation", "wind_mean", "wind_gust",
+]
+_META_COLS: list[str] = ["lat", "lon", "altitude"]
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +117,7 @@ def _parse(path: Path) -> pl.DataFrame | None:
         df = df.select(available)
 
         # Normalise numeric columns to consistent types across all periods
-        float_cols = ["LAT", "LON", "RR", "TN", "TX", "TM", "TAMPLI", "FFM", "FXY", "DXY"]
+        float_cols = ["LAT", "LON", "RR", "TN", "TX", "TM", "TAMPLI", "FFM", "FXY"]
         int_cols = ["NUM_POSTE", "ALTI"]
         df = df.with_columns(
             [pl.col(c).cast(pl.Float64) for c in float_cols if c in df.columns]
@@ -115,6 +139,29 @@ def _parse(path: Path) -> pl.DataFrame | None:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def aggregate(df: pl.DataFrame, granularity: Granularity) -> pl.DataFrame:
+    """Resample a station DataFrame to weekly or monthly averages.
+
+    DAY is the identity — returns df unchanged. For WEEK and MONTH, each
+    numeric measurement column is averaged; metadata columns keep their first
+    value (they are constant per station). The result is sorted by
+    (station_id, DATE).
+    """
+    if granularity == Granularity.DAY:
+        return df
+
+    trunc = granularity.truncate_expr  # guaranteed non-None for WEEK/MONTH
+    numeric_aggs = [pl.col(c).mean() for c in _NUMERIC_COLS if c in df.columns]
+    meta_aggs = [pl.col(c).first() for c in _META_COLS if c in df.columns]
+
+    return (
+        df.with_columns(pl.col("DATE").dt.truncate(trunc))
+        .group_by(["station_id", "station_name", "DATE"])
+        .agg(numeric_aggs + meta_aggs)
+        .sort(["station_id", "DATE"])
+    )
 
 
 def load_department(dept: str) -> pl.DataFrame | None:
@@ -142,14 +189,14 @@ def stations_from(df: pl.DataFrame) -> list[Station]:
     """Extract the unique list of stations from a department DataFrame."""
     return [
         Station(
-            num_poste=row["station_id"],
+            station_id=row["station_id"],
             name=row["station_name"],
-            lat=row["LAT"],
-            lon=row["LON"],
+            lat=row["lat"],
+            lon=row["lon"],
             altitude=row["altitude"],
         )
         for row in (
-            df.select(["station_id", "station_name", "LAT", "LON", "altitude"])
+            df.select(["station_id", "station_name", "lat", "lon", "altitude"])
             .unique(subset=["station_id"])
             .sort("station_name")
             .to_dicts()

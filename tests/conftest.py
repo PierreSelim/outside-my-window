@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Any, TypeVar
 
 import polars as pl
 import pytest
+
+T = TypeVar("T")
+
+
+def find_component(node: Any, cls: type[T]) -> T | None:
+    """Depth-first search for the first Dash component of a given type."""
+    if isinstance(node, cls):
+        return node
+    children = getattr(node, "children", None)
+    if isinstance(children, list):
+        for child in children:
+            result = find_component(child, cls)
+            if result is not None:
+                return result
+    elif children is not None and not isinstance(children, str):
+        return find_component(children, cls)
+    return None
 
 
 @pytest.fixture
@@ -13,8 +31,8 @@ def sample_df() -> pl.DataFrame:
         {
             "station_id":      [31001, 31001, 31001, 31002, 31002],
             "station_name":    ["TOULOUSE", "TOULOUSE", "TOULOUSE", "BLAGNAC", "BLAGNAC"],
-            "LAT":             [43.60, 43.60, 43.60, 43.63, 43.63],
-            "LON":             [1.44,  1.44,  1.44,  1.37,  1.37],
+            "lat":             [43.60, 43.60, 43.60, 43.63, 43.63],
+            "lon":             [1.44,  1.44,  1.44,  1.37,  1.37],
             "altitude":        [152,   152,   152,   151,   151],
             "DATE":            [date(2020, 1, 1), date(2020, 1, 2), date(2020, 1, 3),
                                 date(2020, 1, 1), date(2020, 1, 2)],
@@ -25,13 +43,12 @@ def sample_df() -> pl.DataFrame:
             "precipitation":   [0.0,  2.5,  0.0,  0.0,   1.0],
             "wind_mean":       [3.0,  5.0,  2.0,  None,  None],
             "wind_gust":       [8.0,  12.0, 6.0,  None,  None],
-            "wind_gust_dir":   [180.0, 270.0, 90.0, None, None],
         },
         schema={
             "station_id":     pl.Int32,
             "station_name":   pl.String,
-            "LAT":            pl.Float64,
-            "LON":            pl.Float64,
+            "lat":            pl.Float64,
+            "lon":            pl.Float64,
             "altitude":       pl.Int32,
             "DATE":           pl.Date,
             "temp_min":       pl.Float64,
@@ -41,6 +58,5 @@ def sample_df() -> pl.DataFrame:
             "precipitation":  pl.Float64,
             "wind_mean":      pl.Float64,
             "wind_gust":      pl.Float64,
-            "wind_gust_dir":  pl.Float64,
         },
     )

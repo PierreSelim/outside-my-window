@@ -103,3 +103,25 @@ def test_empty_figure_axes_hidden() -> None:
     fig = empty_figure()
     assert fig.layout.xaxis.visible is False
     assert fig.layout.yaxis.visible is False
+
+
+# ---------------------------------------------------------------------------
+# temperature_figure — band consistency
+# ---------------------------------------------------------------------------
+
+
+def test_temperature_band_traces_share_same_dates_when_nulls_differ(sample_df: pl.DataFrame) -> None:
+    """Max and Min traces must cover identical dates even when TX/TN have different null patterns."""
+    from datetime import date
+
+    df = sample_df.filter(pl.col("station_id") == 31001).with_columns(
+        pl.when(pl.col("DATE") == date(2020, 1, 3))
+        .then(None)
+        .otherwise(pl.col("temp_max"))
+        .cast(pl.Float64)
+        .alias("temp_max")
+    )
+    fig = temperature_figure(df, "TOULOUSE")
+    max_trace = next(t for t in fig.data if t.name == "Max")
+    min_trace = next(t for t in fig.data if t.name == "Min")
+    assert list(max_trace.x) == list(min_trace.x)
