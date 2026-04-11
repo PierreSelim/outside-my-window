@@ -155,7 +155,7 @@ def _parse(path: Path) -> pl.DataFrame | None:
         # Rename to human-readable column names
         rename = {raw: readable for raw, readable in COLUMN_RENAME.items() if raw in df.columns}
         return df.rename(rename)
-    except Exception:  # noqa: BLE001 — any I/O or schema failure, not business logic
+    except (pl.exceptions.PolarsError, OSError):
         return None
 
 

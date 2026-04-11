@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from urllib.parse import parse_qs
 
 import plotly.graph_objects as go
@@ -7,6 +8,7 @@ import polars as pl
 from dash import Dash, Input, Output, State, dcc, html
 
 from src.charts import (
+    _linear_trend,
     empty_figure,
     hot_cold_yearly_figure,
     monthly_avg_temp_by_decade_figure,
@@ -17,6 +19,8 @@ from src.charts import (
 )
 from src.data_loader import Granularity, Station, Truncated, aggregate, granularity_from, load_department_cached, stations_from
 from src.departments import DEPT_NAMES
+
+_DEFAULT_YEAR_WINDOW: int = 20
 
 # ---------------------------------------------------------------------------
 # Layout
@@ -95,7 +99,7 @@ def layout(search: str = "") -> html.Div:
                                         min=year_min,
                                         max=year_max,
                                         step=1,
-                                        value=[max(year_min, year_max - 10), year_max],
+                                        value=[max(year_min, year_max - _DEFAULT_YEAR_WINDOW), year_max],
                                         marks=marks,
                                         tooltip={"placement": "bottom", "always_visible": True},
                                     ),
@@ -172,6 +176,7 @@ def layout(search: str = "") -> html.Div:
                             html.Div(className="card card--flush", children=[
                                 dcc.Graph(id="chart-hot-cold-yearly", config={"displayModeBar": False}),
                             ]),
+                            html.Div(id="trend-stats"),
                         ],
                     ),
                     dcc.Tab(
@@ -240,13 +245,60 @@ def update_yearly_chart(
     year_range: list[int],
     dept: str | None,
     trend_values: list[str] | None,
-) -> go.Figure:
-    """Render the yearly hot/cold days chart, with optional trend lines."""
+) -> tuple[go.Figure, list]:
+    """Render the yearly hot/cold days chart, with optional trend lines.
+
+    The current (incomplete) year is excluded so partial counts don't skew the chart.
+    Returns (figure, trend_stats_children) — the stats card is empty when trends are off.
+    """
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
-        return empty_figure("No data available")
+        return empty_figure("No data available"), []
+    current_year = datetime.date.today().year
+    df = df.filter(pl.col("DATE").dt.year() < current_year)
+    if df.is_empty():
+        return empty_figure("No data available"), []
+
     show_trend = "show" in (trend_values or [])
-    return hot_cold_yearly_figure(df, df["station_name"][0], show_trend=show_trend)
+    fig = hot_cold_yearly_figure(df, df["station_name"][0], show_trend=show_trend)
+
+    if not show_trend:
+        return fig, []
+
+    yearly = (
+        df.with_columns(pl.col("DATE").dt.year().alias("year"))
+        .group_by("year")
+        .agg([
+            (
+                pl.col("temp_min").is_not_null()
+                & pl.col("temp_max").is_not_null()
+                & (pl.col("temp_min") >= 20.0)
+                & (pl.col("temp_max") >= 35.0)
+            ).sum().alias("hot_days"),
+            (pl.col("temp_min").is_not_null() & (pl.col("temp_min") < 0)).sum().alias("cold_days"),
+        ])
+        .sort("year")
+    )
+    years_f = [float(y) for y in yearly["year"].to_list()]
+
+    rows = []
+    for label, col in [("Hot days", "hot_days"), ("Cold days", "cold_days")]:
+        slope, _, r_squared = _linear_trend(years_f, yearly[col].to_list())
+        sign = "+" if slope >= 0 else "−"
+        rows.append(html.Tr([
+            html.Td(label, style={"paddingRight": "1.5rem"}),
+            html.Td(f"{sign}{abs(slope):.2f} days/yr", style={"paddingRight": "1.5rem"}),
+            html.Td(f"R² = {r_squared:.2f}"),
+        ]))
+
+    stats_card = html.Div(
+        className="card",
+        children=[
+            html.Strong("Tendency lines — "),
+            html.Table(html.Tbody(rows), style={"display": "inline-table", "marginLeft": "0.5rem"}),
+        ],
+    )
+    return fig, [stats_card]
 
 
 def update_monthly_charts(
@@ -279,6 +331,7 @@ def register_callbacks(app: Dash) -> None:
 
     app.callback(
         Output("chart-hot-cold-yearly", "figure"),
+        Output("trend-stats", "children"),
         Input("station-dropdown", "value"),
         Input("year-slider", "value"),
         State("dept-store", "data"),

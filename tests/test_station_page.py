@@ -201,21 +201,24 @@ def test_update_charts_daily_no_title_suffix(sample_df) -> None:
 
 def test_update_yearly_chart_returns_figure(sample_df) -> None:
     with patch("src.pages.station_page.load_department_cached", return_value=sample_df):
-        fig = update_yearly_chart(31001, [2020, 2020], "31", [])
+        fig, stats = update_yearly_chart(31001, [2020, 2020], "31", [])
     assert isinstance(fig, go.Figure)
+    assert stats == []
 
 
 def test_update_yearly_chart_no_data_returns_placeholder() -> None:
-    fig = update_yearly_chart(None, [2020, 2020], None, [])
+    fig, stats = update_yearly_chart(None, [2020, 2020], None, [])
     assert isinstance(fig, go.Figure)
     assert len(fig.data) == 0
+    assert stats == []
 
 
 def test_update_yearly_chart_trend_toggle_adds_traces(sample_df) -> None:
     # sample_df has only 1 year so trend guard is not met; just confirm no crash
     with patch("src.pages.station_page.load_department_cached", return_value=sample_df):
-        fig = update_yearly_chart(31001, [2020, 2020], "31", ["show"])
+        fig, stats = update_yearly_chart(31001, [2020, 2020], "31", ["show"])
     assert isinstance(fig, go.Figure)
+    assert isinstance(stats, list)
 
 
 # ---------------------------------------------------------------------------

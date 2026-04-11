@@ -244,30 +244,34 @@ def test_hot_cold_yearly_figure_trend_same_x_as_data(multi_decade_df: pl.DataFra
 
 
 def test_linear_trend_perfect_slope() -> None:
-    slope, intercept = _linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
+    slope, intercept, r_squared = _linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
     assert abs(slope - 2.0) < 1e-9
     assert abs(intercept - 0.0) < 1e-9
+    assert abs(r_squared - 1.0) < 1e-9
 
 
 def test_linear_trend_flat() -> None:
-    slope, intercept = _linear_trend([1.0, 2.0, 3.0], [5.0, 5.0, 5.0])
+    slope, intercept, r_squared = _linear_trend([1.0, 2.0, 3.0], [5.0, 5.0, 5.0])
     assert abs(slope) < 1e-9
     assert abs(intercept - 5.0) < 1e-9
+    assert r_squared == 0.0
 
 
 def test_linear_trend_single_point_returns_zero_slope() -> None:
-    slope, intercept = _linear_trend([2020.0], [10.0])
+    slope, intercept, r_squared = _linear_trend([2020.0], [10.0])
     assert slope == 0.0
     assert intercept == 10.0
+    assert r_squared == 0.0
 
 
 def test_linear_trend_stable_with_large_x() -> None:
     """Centered OLS must not lose precision for year-scale x values."""
     x = [2000.0, 2010.0, 2020.0]
     y = [2000.0, 2010.0, 2020.0]  # slope=1, intercept=0
-    slope, intercept = _linear_trend(x, y)
+    slope, intercept, r_squared = _linear_trend(x, y)
     assert abs(slope - 1.0) < 1e-9
     assert abs(intercept) < 1e-6
+    assert abs(r_squared - 1.0) < 1e-9
 
 
 def test_hot_cold_yearly_figure_x_axis_is_years(sample_df: pl.DataFrame) -> None:

@@ -23,11 +23,11 @@ def _map_figure() -> go.Figure:
     if not _STATIONS:
         fig = go.Figure()
         fig.update_layout(
-            annotations=[dict(
-                text="Station index not found — run: uv run python scripts/build_station_index.py",
-                showarrow=False, font=dict(size=14),
-            )],
-            xaxis=dict(visible=False), yaxis=dict(visible=False),
+            annotations=[{
+                "text": "Station index not found — run: uv run python scripts/build_station_index.py",
+                "showarrow": False, "font": {"size": 14},
+            }],
+            xaxis={"visible": False}, yaxis={"visible": False},
         )
         return fig
 
@@ -36,7 +36,7 @@ def _map_figure() -> go.Figure:
             lat=[s["lat"] for s in _STATIONS],
             lon=[s["lon"] for s in _STATIONS],
             mode="markers",
-            marker=dict(size=7, color="#4C9BE8", opacity=0.75),
+            marker={"size": 7, "color": "#4C9BE8", "opacity": 0.75},
             text=[s["station_name"] for s in _STATIONS],
             customdata=[[s["dept"], s["station_id"], s["altitude"]] for s in _STATIONS],
             hovertemplate=(
@@ -48,8 +48,8 @@ def _map_figure() -> go.Figure:
         )
     )
     fig.update_layout(
-        map=dict(style="open-street-map", center=dict(lat=46.5, lon=2.5), zoom=5),
-        margin=dict(r=0, t=0, l=0, b=0),
+        map={"style": "open-street-map", "center": {"lat": 46.5, "lon": 2.5}, "zoom": 5},
+        margin={"r": 0, "t": 0, "l": 0, "b": 0},
         clickmode="event",
     )
     return fig

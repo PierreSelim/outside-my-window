@@ -27,26 +27,30 @@ _HOT_DAY_FILL: str = "rgba(230, 80, 0, 0.15)"
 # ---------------------------------------------------------------------------
 
 
-def _linear_trend(x: list[float | int], y: list[float | int | None]) -> tuple[float, float]:
-    """Return (slope, intercept) for a simple OLS linear regression.
+def _linear_trend(x: list[float | int], y: list[float | int | None]) -> tuple[float, float, float]:
+    """Return (slope, intercept, r_squared) for a simple OLS linear regression.
 
     Filters out pairs where y is None. Centers x before computing to avoid
     catastrophic cancellation with large x-values (e.g. years). Returns
-    (0, mean_y) when there are fewer than 2 valid points or zero x-variance.
+    (0, mean_y, 0) when there are fewer than 2 valid points or zero x-variance.
+    R² is 0 when SS_tot is zero (constant y).
     """
     pairs = [(float(xi), float(yi)) for xi, yi in zip(x, y) if yi is not None]
     n = len(pairs)
     if n < 2:
-        return 0.0, pairs[0][1] if n == 1 else 0.0
+        return 0.0, pairs[0][1] if n == 1 else 0.0, 0.0
     mean_x = sum(p[0] for p in pairs) / n
     xc = [p[0] - mean_x for p in pairs]
     yv = [p[1] for p in pairs]
     sum_xc2 = sum(v * v for v in xc)
     if sum_xc2 == 0:
-        return 0.0, sum(yv) / n
+        return 0.0, sum(yv) / n, 0.0
     slope = sum(xci * yi for xci, yi in zip(xc, yv)) / sum_xc2
     intercept = sum(yv) / n - slope * mean_x
-    return slope, intercept
+    mean_y = sum(yv) / n
+    ss_tot = sum((yi - mean_y) ** 2 for yi in yv)
+    r_squared = 0.0 if ss_tot == 0 else 1.0 - sum((yi - (slope * xi + intercept)) ** 2 for xi, yi in zip(x, yv)) / ss_tot
+    return slope, intercept, r_squared
 
 
 def _hot_day_dates(df: pl.DataFrame) -> list:
@@ -89,7 +93,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
             x=dates,
             y=temp_max,
             name="Max",
-            line=dict(color=_RED, width=1),
+            line={"color": _RED, "width": 1},
             mode="lines",
         )
     )
@@ -100,7 +104,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
             x=dates,
             y=temp_min,
             name="Min",
-            line=dict(color=_BLUE, width=1),
+            line={"color": _BLUE, "width": 1},
             fill="tonexty",
             fillcolor=_BAND_FILL,
             mode="lines",
@@ -115,7 +119,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
             go.Scatter(
                 x=[None], y=[None],
                 mode="markers",
-                marker=dict(color=_HOT_DAY_FILL, size=10, symbol="square"),
+                marker={"color": _HOT_DAY_FILL, "size": 10, "symbol": "square"},
                 name=f"Hot day (Tmin≥{_HOT_DAY_TMIN:.0f}°C, Tmax≥{_HOT_DAY_TMAX:.0f}°C)",
             )
         )
@@ -123,9 +127,9 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
     fig.update_layout(
         title=f"Temperature — {station_name}{granularity_label}",
         yaxis_title="°C",
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+        legend={"orientation": "h", "y": 1.02, "x": 1, "xanchor": "right"},
         hovermode="x unified",
-        margin=dict(t=50, b=30),
+        margin={"t": 50, "b": 30},
     )
     return fig
 
@@ -148,7 +152,7 @@ def precipitation_figure(df: pl.DataFrame, station_name: str, granularity_label:
         yaxis_title="mm",
         bargap=0,
         hovermode="x unified",
-        margin=dict(t=50, b=30),
+        margin={"t": 50, "b": 30},
     )
     return fig
 
@@ -167,7 +171,7 @@ def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = ""
                 x=dates_gust,
                 y=gust,
                 name="Max gust",
-                line=dict(color=_RED, width=1),
+                line={"color": _RED, "width": 1},
                 mode="lines",
             )
         )
@@ -179,7 +183,7 @@ def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = ""
                 x=dates_mean,
                 y=mean,
                 name="Mean",
-                line=dict(color=_GREEN, width=1.5),
+                line={"color": _GREEN, "width": 1.5},
                 mode="lines",
             )
         )
@@ -188,9 +192,9 @@ def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = ""
     fig.update_layout(
         title=f"Wind — {station_name}{granularity_label}" + (" (no data for this station)" if no_data else ""),
         yaxis_title="m/s",
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+        legend={"orientation": "h", "y": 1.02, "x": 1, "xanchor": "right"},
         hovermode="x unified",
-        margin=dict(t=50, b=30),
+        margin={"t": 50, "b": 30},
     )
     return fig
 
@@ -246,7 +250,7 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
             x=years,
             y=hot_days,
             name=f"Hot days (Tmin≥{_HOT_DAY_TMIN:.0f}°C & Tmax≥{_HOT_DAY_TMAX:.0f}°C)",
-            line=dict(color=_RED, width=2, shape="spline"),
+            line={"color": _RED, "width": 2, "shape": "spline"},
             mode="lines+markers",
         )
     )
@@ -255,7 +259,7 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
             x=years,
             y=cold_days,
             name="Cold days (Tmin < 0°C)",
-            line=dict(color=_BLUE, width=2, shape="spline"),
+            line={"color": _BLUE, "width": 2, "shape": "spline"},
             mode="lines+markers",
         )
     )
@@ -264,23 +268,26 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
             ("Hot days trend", hot_days, _RED),
             ("Cold days trend", cold_days, _BLUE),
         ]:
-            slope, intercept = _linear_trend(years_f, counts)
+            slope, intercept, r_squared = _linear_trend(years_f, counts)
             trend_y = [slope * y + intercept for y in years_f]
+            sign = "+" if slope >= 0 else "−"
+            hover = f"{label}<br>slope: {sign}{abs(slope):.2f} days/yr<br>R²: {r_squared:.2f}<extra></extra>"
             fig.add_trace(
                 go.Scatter(
                     x=years,
                     y=trend_y,
                     name=label,
-                    line=dict(color=color, width=1.5, dash="dash"),
+                    line={"color": color, "width": 1.5, "dash": "dash"},
                     mode="lines",
+                    hovertemplate=hover,
                 )
             )
     fig.update_layout(
         title=f"Yearly extreme days — {station_name}",
         yaxis_title="Days",
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+        legend={"orientation": "h", "y": 1.02, "x": 1, "xanchor": "right"},
         hovermode="x unified",
-        margin=dict(t=50, b=30),
+        margin={"t": 50, "b": 30},
     )
     return fig
 
@@ -307,7 +314,7 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
             x=month_labels,
             y=monthly["avg_temp_max"].to_list(),
             name="Avg Tmax",
-            line=dict(color=_RED, width=2, shape="spline"),
+            line={"color": _RED, "width": 2, "shape": "spline"},
             mode="lines+markers",
         )
     )
@@ -316,16 +323,16 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
             x=month_labels,
             y=monthly["avg_temp_min"].to_list(),
             name="Avg Tmin",
-            line=dict(color=_BLUE, width=2, shape="spline"),
+            line={"color": _BLUE, "width": 2, "shape": "spline"},
             mode="lines+markers",
         )
     )
     fig.update_layout(
         title=f"Monthly average temperatures — {station_name}",
         yaxis_title="°C",
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+        legend={"orientation": "h", "y": 1.02, "x": 1, "xanchor": "right"},
         hovermode="x unified",
-        margin=dict(t=50, b=30),
+        margin={"t": 50, "b": 30},
     )
     return fig
 
@@ -368,7 +375,7 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
                 x=month_labels,
                 y=sub["avg_temp_max"].to_list(),
                 name=f"{label} Tmax",
-                line=dict(color=tmax_color, width=2, shape="spline"),
+                line={"color": tmax_color, "width": 2, "shape": "spline"},
                 mode="lines+markers",
             )
         )
@@ -377,7 +384,7 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
                 x=month_labels,
                 y=sub["avg_temp_min"].to_list(),
                 name=f"{label} Tmin",
-                line=dict(color=tmin_color, width=2, dash="dash", shape="spline"),
+                line={"color": tmin_color, "width": 2, "dash": "dash", "shape": "spline"},
                 mode="lines+markers",
             )
         )
@@ -385,9 +392,9 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
     fig.update_layout(
         title=f"Monthly average temperatures by decade — {station_name}",
         yaxis_title="°C",
-        legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+        legend={"orientation": "h", "y": 1.02, "x": 1, "xanchor": "right"},
         hovermode="x unified",
-        margin=dict(t=50, b=30),
+        margin={"t": 50, "b": 30},
     )
     return fig
 
@@ -400,9 +407,9 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
 def empty_figure(message: str = "No data") -> go.Figure:
     fig = go.Figure()
     fig.update_layout(
-        annotations=[dict(text=message, showarrow=False, font=dict(size=16, color=_GREY))],
-        xaxis=dict(visible=False),
-        yaxis=dict(visible=False),
-        margin=dict(t=50, b=30),
+        annotations=[{"text": message, "showarrow": False, "font": {"size": 16, "color": _GREY}}],
+        xaxis={"visible": False},
+        yaxis={"visible": False},
+        margin={"t": 50, "b": 30},
     )
     return fig
