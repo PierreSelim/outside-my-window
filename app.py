@@ -10,6 +10,13 @@ app = Dash(__name__, title="Outside My Window", suppress_callback_exceptions=Tru
 
 app.layout = html.Div([
     dcc.Location(id="url"),
+    html.Nav(
+        className="app-navbar",
+        children=[
+            html.Span("Outside My Window", className="app-navbar-title"),
+            html.Span("Météo France · Données climatologiques quotidiennes", className="app-navbar-subtitle"),
+        ],
+    ),
     dcc.Loading(type="circle", children=html.Div(id="page-content")),
 ])
 

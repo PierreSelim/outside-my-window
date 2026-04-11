@@ -6,7 +6,7 @@ import polars as pl
 from dash import Dash, Input, Output, State, dcc, html
 
 from src.charts import empty_figure, precipitation_figure, temperature_figure, wind_figure
-from src.data_loader import Granularity, Station, aggregate, load_department, stations_from
+from src.data_loader import Granularity, Station, Truncated, aggregate, granularity_from, load_department, stations_from
 from src.departments import DEPT_NAMES
 
 # ---------------------------------------------------------------------------
@@ -55,80 +55,90 @@ def layout(search: str = "") -> html.Div:
 
     station_options = [{"label": s.name, "value": s.station_id} for s in stations]
 
+    dept_label = f"{DEPT_NAMES.get(dept, dept)} ({dept})" if dept else ""
+
     return html.Div(
-        style={"fontFamily": "sans-serif", "maxWidth": "1400px", "margin": "0 auto", "padding": "1rem"},
+        className="page-container",
         children=[
-            # Navigation
+            # Navigation breadcrumb
             html.Div(
-                style={"marginBottom": "1rem"},
+                className="page-nav",
                 children=[
-                    dcc.Link("← Back to map", href="/", style={"color": "#4C9BE8", "textDecoration": "none"}),
-                    html.Span(
-                        f"  ·  {DEPT_NAMES.get(dept, dept)} ({dept})" if dept else "",
-                        style={"color": "#888", "marginLeft": "0.5rem"},
-                    ),
+                    dcc.Link("← Back to map", href="/", className="back-link"),
+                    html.Span("·", className="page-nav-sep"),
+                    html.Span(dept_label, className="page-nav-dept"),
                 ],
             ),
 
             # Store dept for use in update_charts
             dcc.Store(id="dept-store", data=dept),
 
-            # Controls row
+            # Controls card
             html.Div(
-                style={"display": "flex", "gap": "2rem", "alignItems": "flex-start", "marginBottom": "1.5rem"},
+                className="card",
                 children=[
                     html.Div(
-                        style={"flex": "0 0 320px"},
+                        className="controls-row",
                         children=[
-                            html.Label("Station", style={"fontWeight": "bold"}),
-                            dcc.Dropdown(
-                                id="station-dropdown",
-                                options=station_options,
-                                value=initial_station,
-                                clearable=False,
-                            ),
-                        ],
-                    ),
-                    html.Div(
-                        style={"flex": "1"},
-                        children=[
-                            html.Label("Year range", style={"fontWeight": "bold"}),
-                            dcc.RangeSlider(
-                                id="year-slider",
-                                min=year_min,
-                                max=year_max,
-                                step=1,
-                                value=[max(year_min, year_max - 10), year_max],
-                                marks=marks,
-                                tooltip={"placement": "bottom", "always_visible": True},
-                            ),
-                        ],
-                    ),
-                    html.Div(
-                        style={"flex": "0 0 220px"},
-                        children=[
-                            html.Label("Granularity", style={"fontWeight": "bold"}),
-                            dcc.RadioItems(
-                                id="granularity-radio",
-                                options=[
-                                    {"label": "Day",   "value": Granularity.DAY.value},
-                                    {"label": "Week",  "value": Granularity.WEEK.value},
-                                    {"label": "Month", "value": Granularity.MONTH.value},
+                            html.Div(
+                                className="control-group control-group--station",
+                                children=[
+                                    html.Label("Station", className="control-label"),
+                                    dcc.Dropdown(
+                                        id="station-dropdown",
+                                        options=station_options,
+                                        value=initial_station,
+                                        clearable=False,
+                                    ),
                                 ],
-                                value=Granularity.DAY.value,
-                                inline=True,
-                                inputStyle={"marginRight": "4px"},
-                                labelStyle={"marginRight": "12px"},
+                            ),
+                            html.Div(
+                                className="control-group control-group--slider",
+                                children=[
+                                    html.Label("Year range", className="control-label"),
+                                    dcc.RangeSlider(
+                                        id="year-slider",
+                                        min=year_min,
+                                        max=year_max,
+                                        step=1,
+                                        value=[max(year_min, year_max - 10), year_max],
+                                        marks=marks,
+                                        tooltip={"placement": "bottom", "always_visible": True},
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-group control-group--granularity",
+                                children=[
+                                    html.Label("Granularity", className="control-label"),
+                                    dcc.RadioItems(
+                                        id="granularity-radio",
+                                        className="granularity-pills",
+                                        options=[
+                                            {"label": "Day",   "value": "day"},
+                                            {"label": "Week",  "value": Granularity.WEEK.label},
+                                            {"label": "Month", "value": Granularity.MONTH.label},
+                                        ],
+                                        value="day",
+                                        inline=True,
+                                    ),
+                                ],
                             ),
                         ],
                     ),
                 ],
             ),
 
-            # Charts
-            dcc.Graph(id="chart-temperature", config={"displayModeBar": False}),
-            dcc.Graph(id="chart-precipitation", config={"displayModeBar": False}),
-            dcc.Graph(id="chart-wind", config={"displayModeBar": False}),
+            # Charts — each in its own card
+            html.Div(className="card card--flush", children=[
+                dcc.Graph(id="chart-temperature", config={"displayModeBar": False}),
+            ]),
+            html.Div(className="card card--flush", children=[
+                dcc.Graph(id="chart-precipitation", config={"displayModeBar": False}),
+            ]),
+            html.Div(className="card card--flush", children=[
+                dcc.Graph(id="chart-wind", config={"displayModeBar": False}),
+            ]),
         ],
     )
 
@@ -164,9 +174,9 @@ def update_charts(
         placeholder = empty_figure("No data for this station / period")
         return placeholder, placeholder, placeholder
 
-    granularity = Granularity(granularity_value)
+    granularity: Truncated | None = granularity_from(granularity_value)
     df = aggregate(df, granularity)
-    label = granularity.title_suffix
+    label = granularity.title_suffix if granularity else ""
     station_name = df["station_name"][0]
     return (
         temperature_figure(df, station_name, label),

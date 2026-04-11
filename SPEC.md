@@ -54,7 +54,7 @@ Separator: `;` — Missing value sentinel: `mq`
 | `ALTI` | Altitude in metres (int) |
 | `AAAAMMJJ` | Date as YYYYMMDD integer — must be parsed |
 | `RR` | Daily precipitation (mm) |
-| `TN` / `TX` / `TM` | Min / Max / Mean temperature (°C) |
+| `TN` / `TX` | Min / Max temperature (°C) |
 | `TAMPLI` | Temperature amplitude TX−TN |
 | `FFM` | Mean wind speed (m/s) |
 | `FXY` | Max wind gust (m/s) |
@@ -62,7 +62,7 @@ Separator: `;` — Missing value sentinel: `mq`
 | `Q*` | Quality flag for each measure: `1` = valid, `9` = estimated, `null` = missing |
 
 Dept 31 (latest period): **22 stations**, 9 235 rows, 2025-01-01 → 2026-04-07.
-`TM` and wind columns have significant nulls (not all stations measure them).
+Wind columns have significant nulls (not all stations measure them).
 
 ## Station Index (`data/stations.json`)
 Pre-built file committed to the repo. Generated once (and regenerated when station network changes) by `scripts/build_station_index.py`.
@@ -102,7 +102,7 @@ Multi-page routing via `dcc.Location` + a top-level callback in `app.py` that re
 
 #### Temporal aggregation
 When Week or Month is selected, daily rows are grouped by truncated date period and all
-numeric measurement columns (`temp_min`, `temp_max`, `temp_mean`, `temp_amplitude`,
+numeric measurement columns (`temp_min`, `temp_max`, `temp_amplitude`,
 `precipitation`, `wind_mean`, `wind_gust`) are averaged (`mean`). Metadata columns
 (`lat`, `lon`, `altitude`) keep their first value (constant per station). Chart titles
 gain a suffix: ` (weekly avg)` or ` (monthly avg)`.

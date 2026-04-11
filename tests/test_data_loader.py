@@ -8,7 +8,7 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 
-from src.data_loader import Granularity, Station, _parse, aggregate, load_department, stations_from
+from src.data_loader import Granularity, Station, Truncated, _parse, aggregate, granularity_from, load_department, stations_from
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,7 +41,6 @@ def test_parse_renames_columns(tmp_path: Path) -> None:
     assert df is not None
     assert "temp_min" in df.columns
     assert "temp_max" in df.columns
-    assert "temp_mean" in df.columns
     assert "precipitation" in df.columns
     assert "wind_mean" in df.columns
     assert "wind_gust" in df.columns
@@ -158,7 +157,6 @@ def multi_week_df() -> pl.DataFrame:
             "DATE":           [date(2020, 1, 6), date(2020, 1, 7), date(2020, 1, 13), date(2020, 1, 6)],
             "temp_min":       [0.0,   2.0,  4.0,  1.0],
             "temp_max":       [8.0,  10.0, 12.0,  9.0],
-            "temp_mean":      [4.0,   6.0,  8.0,  5.0],
             "temp_amplitude": [8.0,   8.0,  8.0,  8.0],
             "precipitation":  [1.0,   3.0,  2.0,  0.5],
             "wind_mean":      [2.0,   4.0,  3.0,  None],
@@ -173,7 +171,6 @@ def multi_week_df() -> pl.DataFrame:
             "DATE":           pl.Date,
             "temp_min":       pl.Float64,
             "temp_max":       pl.Float64,
-            "temp_mean":      pl.Float64,
             "temp_amplitude": pl.Float64,
             "precipitation":  pl.Float64,
             "wind_mean":      pl.Float64,
@@ -183,7 +180,7 @@ def multi_week_df() -> pl.DataFrame:
 
 
 def test_aggregate_day_is_identity(sample_df: pl.DataFrame) -> None:
-    result = aggregate(sample_df, Granularity.DAY)
+    result = aggregate(sample_df, None)
     assert result is sample_df
 
 
@@ -215,7 +212,7 @@ def test_aggregate_month_averages_values(multi_week_df: pl.DataFrame) -> None:
     toulouse = result.filter(pl.col("station_id") == 31001).row(0, named=True)
     # Jan 6, 7, 13 → temp_min mean = (0+2+4)/3
     assert toulouse["temp_min"] == pytest.approx(2.0)
-    assert toulouse["wind_mean"] == pytest.approx(3.0)  # (2+4+3)/3
+    assert toulouse["wind_mean"] == pytest.approx(3.0)   # (2+4+3)/3
 
 
 def test_aggregate_preserves_null_columns(multi_week_df: pl.DataFrame) -> None:
@@ -235,13 +232,30 @@ def test_aggregate_week_date_is_week_start(multi_week_df: pl.DataFrame) -> None:
     assert toulouse["DATE"][0] == date(2020, 1, 6)
 
 
-def test_granularity_title_suffix() -> None:
-    assert Granularity.DAY.title_suffix == ""
+def test_truncated_fields() -> None:
+    assert Granularity.WEEK.label == "week"
+    assert Granularity.WEEK.truncate_expr == "1w"
     assert Granularity.WEEK.title_suffix == " (weekly avg)"
+    assert Granularity.MONTH.label == "month"
+    assert Granularity.MONTH.truncate_expr == "1mo"
     assert Granularity.MONTH.title_suffix == " (monthly avg)"
 
 
-def test_granularity_truncate_expr() -> None:
-    assert Granularity.DAY.truncate_expr is None
-    assert Granularity.WEEK.truncate_expr == "1w"
-    assert Granularity.MONTH.truncate_expr == "1mo"
+def test_granularity_day_is_none() -> None:
+    assert Granularity.DAY is None
+
+
+def test_granularity_from_returns_truncated_for_week() -> None:
+    result = granularity_from("week")
+    assert isinstance(result, Truncated)
+    assert result is Granularity.WEEK
+
+
+def test_granularity_from_returns_truncated_for_month() -> None:
+    result = granularity_from("month")
+    assert isinstance(result, Truncated)
+    assert result is Granularity.MONTH
+
+
+def test_granularity_from_returns_none_for_day() -> None:
+    assert granularity_from("day") is None

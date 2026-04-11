@@ -57,17 +57,12 @@ def _map_figure() -> go.Figure:
 
 def layout() -> html.Div:
     return html.Div(
-        style={"fontFamily": "sans-serif"},
         children=[
-            html.H2(
-                "Outside My Window — Météo France",
-                style={"margin": "0.75rem 1rem", "fontSize": "1.25rem"},
-            ),
             dcc.Graph(
                 id="station-map",
                 figure=_map_figure(),
                 config={"displayModeBar": False, "scrollZoom": True},
-                style={"height": "calc(100vh - 56px)"},
+                style={"height": "calc(100vh - 52px)"},
             ),
         ],
     )

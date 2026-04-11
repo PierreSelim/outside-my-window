@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import polars as pl
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -11,15 +13,31 @@ from plotly.subplots import make_subplots
 
 _BLUE = "#4C9BE8"
 _RED = "#E85C4C"
-_ORANGE = "#F5A623"
 _GREEN = "#5CB85C"
 _GREY = "#AAAAAA"
 _BAND_FILL = "rgba(76, 155, 232, 0.15)"
+
+# Hot day: temp_min ≥ 20 °C AND temp_max ≥ 35 °C
+_HOT_DAY_TMIN: float = 20.0
+_HOT_DAY_TMAX: float = 35.0
+_HOT_DAY_FILL: str = "rgba(230, 80, 0, 0.15)"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _hot_day_dates(df: pl.DataFrame) -> list:
+    """Return dates where temp_min ≥ 20 °C and temp_max ≥ 35 °C."""
+    return (
+        df.filter(
+            pl.col("temp_min").is_not_null()
+            & pl.col("temp_max").is_not_null()
+            & (pl.col("temp_min") >= _HOT_DAY_TMIN)
+            & (pl.col("temp_max") >= _HOT_DAY_TMAX)
+        )["DATE"].to_list()
+    )
 
 
 def _series(df: pl.DataFrame, col: str) -> tuple[list, list]:
@@ -35,7 +53,7 @@ def _series(df: pl.DataFrame, col: str) -> tuple[list, list]:
 
 
 def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: str = "") -> go.Figure:
-    """Line chart: TN/TX shaded band + TM mean line."""
+    """Line chart: TN/TX shaded band."""
     fig = go.Figure()
 
     # Filter jointly so both band traces cover identical dates
@@ -67,16 +85,16 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
         )
     )
 
-    # temp_mean (optional — many stations lack it)
-    if df["temp_mean"].is_not_null().any():
-        dates_mean, temp_mean = _series(df, "temp_mean")
+    hot_days = _hot_day_dates(df)
+    for d in hot_days:
+        fig.add_vrect(x0=d, x1=d + timedelta(days=1), fillcolor=_HOT_DAY_FILL, layer="below", line_width=0)
+    if hot_days:
         fig.add_trace(
             go.Scatter(
-                x=dates_mean,
-                y=temp_mean,
-                name="Mean",
-                line=dict(color=_ORANGE, width=1.5),
-                mode="lines",
+                x=[None], y=[None],
+                mode="markers",
+                marker=dict(color=_HOT_DAY_FILL, size=10, symbol="square"),
+                name=f"Hot day (Tmin≥{_HOT_DAY_TMIN:.0f}°C, Tmax≥{_HOT_DAY_TMAX:.0f}°C)",
             )
         )
 

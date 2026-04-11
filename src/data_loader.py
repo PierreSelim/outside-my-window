@@ -13,7 +13,7 @@ CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
 # Columns we actually need for visualisation — the raw files have 60 columns
 KEEP_COLS: list[str] = [
     "NUM_POSTE", "NOM_USUEL", "LAT", "LON", "ALTI", "AAAAMMJJ",
-    "RR", "TN", "TX", "TM", "TAMPLI", "FFM", "FXY",
+    "RR", "TN", "TX", "TAMPLI", "FFM", "FXY",
 ]
 
 # Mapping from raw dataset column names to human-readable equivalents
@@ -25,7 +25,6 @@ COLUMN_RENAME: dict[str, str] = {
     "ALTI":      "altitude",
     "TN":        "temp_min",
     "TX":        "temp_max",
-    "TM":        "temp_mean",
     "TAMPLI":    "temp_amplitude",
     "RR":        "precipitation",
     "FFM":       "wind_mean",
@@ -39,20 +38,43 @@ class Period(str, Enum):
     LATEST = "latest-2025-2026"
 
 
-class Granularity(str, Enum):
-    DAY = "day"
-    WEEK = "week"
-    MONTH = "month"
+@dataclass(frozen=True)
+class Truncated:
+    """A granularity that collapses daily rows to a coarser period by averaging.
 
-    @property
-    def truncate_expr(self) -> str | None:
-        """Polars truncate string for group_by_dynamic, or None for DAY (identity)."""
-        return {"week": "1w", "month": "1mo"}.get(self.value)
+    ``label`` is the RadioItems wire value; ``truncate_expr`` is passed directly
+    to Polars ``dt.truncate``; ``title_suffix`` is appended to chart titles.
+    """
 
-    @property
-    def title_suffix(self) -> str:
-        """Label appended to chart titles when not daily."""
-        return {"week": " (weekly avg)", "month": " (monthly avg)"}.get(self.value, "")
+    label: str
+    truncate_expr: str
+    title_suffix: str
+
+
+class Granularity:
+    """Namespace of granularity constants.
+
+    DAY is None — the identity case, no truncation needed.
+    WEEK and MONTH are Truncated instances carrying all derived values.
+    """
+
+    DAY: None = None
+    WEEK: Truncated = Truncated("week", "1w", " (weekly avg)")
+    MONTH: Truncated = Truncated("month", "1mo", " (monthly avg)")
+
+
+_GRANULARITY_BY_LABEL: dict[str, Truncated] = {
+    g.label: g for g in [Granularity.WEEK, Granularity.MONTH]
+}
+
+
+def granularity_from(value: str) -> Truncated | None:
+    """Parse a RadioItems string value into a Truncated granularity.
+
+    Returns None for the daily (identity) case — any value not in the
+    lookup is treated as DAY.
+    """
+    return _GRANULARITY_BY_LABEL.get(value)
 
 
 @dataclass(frozen=True)
@@ -65,7 +87,7 @@ class Station:
 
 
 _NUMERIC_COLS: list[str] = [
-    "temp_min", "temp_max", "temp_mean", "temp_amplitude",
+    "temp_min", "temp_max", "temp_amplitude",
     "precipitation", "wind_mean", "wind_gust",
 ]
 _META_COLS: list[str] = ["lat", "lon", "altitude"]
@@ -117,7 +139,7 @@ def _parse(path: Path) -> pl.DataFrame | None:
         df = df.select(available)
 
         # Normalise numeric columns to consistent types across all periods
-        float_cols = ["LAT", "LON", "RR", "TN", "TX", "TM", "TAMPLI", "FFM", "FXY"]
+        float_cols = ["LAT", "LON", "RR", "TN", "TX", "TAMPLI", "FFM", "FXY"]
         int_cols = ["NUM_POSTE", "ALTI"]
         df = df.with_columns(
             [pl.col(c).cast(pl.Float64) for c in float_cols if c in df.columns]
@@ -141,23 +163,22 @@ def _parse(path: Path) -> pl.DataFrame | None:
 # ---------------------------------------------------------------------------
 
 
-def aggregate(df: pl.DataFrame, granularity: Granularity) -> pl.DataFrame:
+def aggregate(df: pl.DataFrame, granularity: Truncated | None) -> pl.DataFrame:
     """Resample a station DataFrame to weekly or monthly averages.
 
-    DAY is the identity — returns df unchanged. For WEEK and MONTH, each
-    numeric measurement column is averaged; metadata columns keep their first
-    value (they are constant per station). The result is sorted by
-    (station_id, DATE).
+    None (DAY) is the identity — returns df unchanged. For a Truncated
+    granularity, each numeric measurement column is averaged; metadata columns
+    keep their first value (they are constant per station). The result is
+    sorted by (station_id, DATE).
     """
-    if granularity == Granularity.DAY:
+    if granularity is None:
         return df
 
-    trunc = granularity.truncate_expr  # guaranteed non-None for WEEK/MONTH
     numeric_aggs = [pl.col(c).mean() for c in _NUMERIC_COLS if c in df.columns]
     meta_aggs = [pl.col(c).first() for c in _META_COLS if c in df.columns]
 
     return (
-        df.with_columns(pl.col("DATE").dt.truncate(trunc))
+        df.with_columns(pl.col("DATE").dt.truncate(granularity.truncate_expr))
         .group_by(["station_id", "station_name", "DATE"])
         .agg(numeric_aggs + meta_aggs)
         .sort(["station_id", "DATE"])

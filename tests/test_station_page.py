@@ -7,7 +7,7 @@ import pytest
 from dash import dcc, html
 
 import src.pages.station_page as station_page
-from src.data_loader import Granularity
+from src.data_loader import Granularity, Truncated
 from src.pages.station_page import layout, update_charts
 from tests.conftest import find_component
 
@@ -68,10 +68,16 @@ def test_layout_empty_dataframe_uses_fallback_years(sample_df) -> None:
 def test_layout_header_shows_department_name(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
         result = layout("?dept=31&station=31001")
-    # Dept 31 is Haute-Garonne — its name must appear in a Span in the nav header
-    span = find_component(result, html.Span)
-    assert span is not None
-    assert "Haute-Garonne" in (span.children or "")
+
+    def find_dept_span(node) -> bool:
+        if isinstance(node, html.Span) and "Haute-Garonne" in (node.children or ""):
+            return True
+        for child in getattr(node, "children", []) or []:
+            if find_dept_span(child):
+                return True
+        return False
+
+    assert find_dept_span(result)
 
 
 def test_layout_contains_back_link(sample_df) -> None:
@@ -97,39 +103,39 @@ def test_layout_contains_back_link(sample_df) -> None:
 
 def test_update_charts_returns_three_figures(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, precip, wind = update_charts(31001, [2020, 2020], "31", Granularity.DAY.value)
+        temp, precip, wind = update_charts(31001, [2020, 2020], "31", "day")
     assert all(isinstance(f, go.Figure) for f in (temp, precip, wind))
 
 
 def test_update_charts_no_dept_returns_placeholders() -> None:
-    temp, precip, wind = update_charts(31001, [2020, 2020], None, Granularity.DAY.value)
+    temp, precip, wind = update_charts(31001, [2020, 2020], None, "day")
     assert all(len(f.data) == 0 for f in (temp, precip, wind))
 
 
 def test_update_charts_no_station_returns_placeholders(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, precip, wind = update_charts(None, [2020, 2020], "31", Granularity.DAY.value)
+        temp, precip, wind = update_charts(None, [2020, 2020], "31", "day")
     assert all(len(f.data) == 0 for f in (temp, precip, wind))
 
 
 def test_update_charts_load_failure_returns_placeholders() -> None:
     with patch("src.pages.station_page._load_cached", return_value=None):
-        temp, precip, wind = update_charts(31001, [2020, 2020], "31", Granularity.DAY.value)
+        temp, precip, wind = update_charts(31001, [2020, 2020], "31", "day")
     assert all(len(f.data) == 0 for f in (temp, precip, wind))
 
 
 def test_update_charts_year_filter_applied(sample_df) -> None:
     # sample_df has dates only in 2020 — filtering to 2021 should yield empty/placeholder
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, precip, wind = update_charts(31001, [2021, 2021], "31", Granularity.DAY.value)
+        temp, precip, wind = update_charts(31001, [2021, 2021], "31", "day")
     assert all(len(f.data) == 0 for f in (temp, precip, wind))
 
 
 def test_update_charts_calls_load_cached_per_invocation(sample_df) -> None:
     # Cache logic lives inside _load_cached itself; update_charts always delegates to it.
     with patch("src.pages.station_page._load_cached", return_value=sample_df) as mock_load:
-        update_charts(31001, [2020, 2020], "31", Granularity.DAY.value)
-        update_charts(31001, [2020, 2020], "31", Granularity.DAY.value)
+        update_charts(31001, [2020, 2020], "31", "day")
+        update_charts(31001, [2020, 2020], "31", "day")
     assert mock_load.call_count == 2
 
 
@@ -151,7 +157,7 @@ def test_layout_granularity_radio_default_is_day(sample_df) -> None:
         result = layout("?dept=31&station=31001")
     radio = find_component(result, dcc.RadioItems)
     assert radio is not None
-    assert radio.value == Granularity.DAY.value
+    assert radio.value == "day"
 
 
 def test_layout_granularity_radio_has_three_options(sample_df) -> None:
@@ -161,28 +167,28 @@ def test_layout_granularity_radio_has_three_options(sample_df) -> None:
     assert radio is not None
     assert len(radio.options) == 3
     option_values = {opt["value"] for opt in radio.options}
-    assert option_values == {Granularity.DAY.value, Granularity.WEEK.value, Granularity.MONTH.value}
+    assert option_values == {"day", Granularity.WEEK.label, Granularity.MONTH.label}
 
 
 def test_update_charts_weekly_returns_figures(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, precip, wind = update_charts(31001, [2020, 2020], "31", Granularity.WEEK.value)
+        temp, precip, wind = update_charts(31001, [2020, 2020], "31", Granularity.WEEK.label)
     assert all(isinstance(f, go.Figure) for f in (temp, precip, wind))
 
 
 def test_update_charts_monthly_title_suffix(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, _, _ = update_charts(31001, [2020, 2020], "31", Granularity.MONTH.value)
+        temp, _, _ = update_charts(31001, [2020, 2020], "31", Granularity.MONTH.label)
     assert "(monthly avg)" in temp.layout.title.text
 
 
 def test_update_charts_weekly_title_suffix(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, _, _ = update_charts(31001, [2020, 2020], "31", Granularity.WEEK.value)
+        temp, _, _ = update_charts(31001, [2020, 2020], "31", Granularity.WEEK.label)
     assert "(weekly avg)" in temp.layout.title.text
 
 
 def test_update_charts_daily_no_title_suffix(sample_df) -> None:
     with patch("src.pages.station_page._load_cached", return_value=sample_df):
-        temp, _, _ = update_charts(31001, [2020, 2020], "31", Granularity.DAY.value)
+        temp, _, _ = update_charts(31001, [2020, 2020], "31", "day")
     assert "avg" not in temp.layout.title.text
