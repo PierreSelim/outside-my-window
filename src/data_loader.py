@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -204,6 +205,22 @@ def load_department(dept: str) -> pl.DataFrame | None:
         return None
 
     return pl.concat(frames, how="diagonal").sort(["station_id", "DATE"])
+
+
+_dept_cache: dict[str, pl.DataFrame | None] = {}
+_dept_cache_lock = threading.Lock()
+
+
+def load_department_cached(dept: str) -> pl.DataFrame | None:
+    """Return a department DataFrame from an in-process cache, loading on first access.
+
+    Thread-safe: concurrent requests for the same department will not trigger
+    duplicate downloads.
+    """
+    with _dept_cache_lock:
+        if dept not in _dept_cache:
+            _dept_cache[dept] = load_department(dept)
+    return _dept_cache[dept]
 
 
 def stations_from(df: pl.DataFrame) -> list[Station]:

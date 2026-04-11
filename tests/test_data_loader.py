@@ -8,7 +8,7 @@ from unittest.mock import patch
 import polars as pl
 import pytest
 
-from src.data_loader import Granularity, Station, Truncated, _parse, aggregate, granularity_from, load_department, stations_from
+from src.data_loader import Granularity, Station, Truncated, _parse, aggregate, granularity_from, load_department, load_department_cached, stations_from
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -259,3 +259,29 @@ def test_granularity_from_returns_truncated_for_month() -> None:
 
 def test_granularity_from_returns_none_for_day() -> None:
     assert granularity_from("day") is None
+
+
+# ---------------------------------------------------------------------------
+# load_department_cached
+# ---------------------------------------------------------------------------
+
+
+def test_load_department_cached_calls_load_department(sample_df: pl.DataFrame) -> None:
+    import src.data_loader as dl
+    # Use a fresh dept key that is not already in the shared cache
+    dl._dept_cache.pop("__test_dept__", None)
+    with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
+        result = load_department_cached("__test_dept__")
+    assert result is sample_df
+    mock_load.assert_called_once_with("__test_dept__")
+    dl._dept_cache.pop("__test_dept__", None)  # clean up
+
+
+def test_load_department_cached_reuses_cache(sample_df: pl.DataFrame) -> None:
+    import src.data_loader as dl
+    dl._dept_cache.pop("__test_dept2__", None)
+    with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
+        load_department_cached("__test_dept2__")
+        load_department_cached("__test_dept2__")
+    mock_load.assert_called_once()  # second call must not trigger load_department
+    dl._dept_cache.pop("__test_dept2__", None)  # clean up

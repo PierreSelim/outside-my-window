@@ -2,31 +2,25 @@ from __future__ import annotations
 
 from urllib.parse import parse_qs
 
+import plotly.graph_objects as go
 import polars as pl
 from dash import Dash, Input, Output, State, dcc, html
 
-from src.charts import empty_figure, precipitation_figure, temperature_figure, wind_figure
-from src.data_loader import Granularity, Station, Truncated, aggregate, granularity_from, load_department, stations_from
+from src.charts import (
+    empty_figure,
+    hot_cold_yearly_figure,
+    monthly_avg_temp_by_decade_figure,
+    monthly_avg_temp_figure,
+    precipitation_figure,
+    temperature_figure,
+    wind_figure,
+)
+from src.data_loader import Granularity, Station, Truncated, aggregate, granularity_from, load_department_cached, stations_from
 from src.departments import DEPT_NAMES
-
-# ---------------------------------------------------------------------------
-# Server-side data cache — one DataFrame per department, loaded on first visit
-# ---------------------------------------------------------------------------
-
-_dept_cache: dict[str, pl.DataFrame | None] = {}
-
-
-def _load_cached(dept: str) -> pl.DataFrame | None:
-    if dept not in _dept_cache:
-        _dept_cache[dept] = load_department(dept)
-    return _dept_cache[dept]
-
 
 # ---------------------------------------------------------------------------
 # Layout
 # ---------------------------------------------------------------------------
-
-_FALLBACK_MARKS = {y: str(y) for y in range(1950, 2027, 10)}
 
 
 def layout(search: str = "") -> html.Div:
@@ -40,7 +34,7 @@ def layout(search: str = "") -> html.Div:
     raw_station = params.get("station", [None])[0]
     initial_station: int | None = int(raw_station) if raw_station else None
 
-    df = _load_cached(dept) if dept else None
+    df = load_department_cached(dept) if dept else None
     stations: list[Station] = stations_from(df) if df is not None else []
 
     _date_min = df["DATE"].min() if df is not None else None
@@ -73,7 +67,7 @@ def layout(search: str = "") -> html.Div:
             # Store dept for use in update_charts
             dcc.Store(id="dept-store", data=dept),
 
-            # Controls card
+            # Controls card — station and year range apply to all tabs
             html.Div(
                 className="card",
                 children=[
@@ -107,38 +101,93 @@ def layout(search: str = "") -> html.Div:
                                     ),
                                 ],
                             ),
-                            html.Div(
-                                className="control-group control-group--granularity",
-                                children=[
-                                    html.Label("Granularity", className="control-label"),
-                                    dcc.RadioItems(
-                                        id="granularity-radio",
-                                        className="granularity-pills",
-                                        options=[
-                                            {"label": "Day",   "value": "day"},
-                                            {"label": "Week",  "value": Granularity.WEEK.label},
-                                            {"label": "Month", "value": Granularity.MONTH.label},
-                                        ],
-                                        value="day",
-                                        inline=True,
-                                    ),
-                                ],
-                            ),
                         ],
                     ),
                 ],
             ),
 
-            # Charts — each in its own card
-            html.Div(className="card card--flush", children=[
-                dcc.Graph(id="chart-temperature", config={"displayModeBar": False}),
-            ]),
-            html.Div(className="card card--flush", children=[
-                dcc.Graph(id="chart-precipitation", config={"displayModeBar": False}),
-            ]),
-            html.Div(className="card card--flush", children=[
-                dcc.Graph(id="chart-wind", config={"displayModeBar": False}),
-            ]),
+            # Tabbed chart area
+            dcc.Tabs(
+                id="station-tabs",
+                value="observations",
+                children=[
+                    dcc.Tab(
+                        label="Observations",
+                        value="observations",
+                        children=[
+                            # Granularity control — only meaningful for this tab
+                            html.Div(
+                                className="card",
+                                children=[
+                                    html.Div(
+                                        className="controls-row",
+                                        children=[
+                                            html.Div(
+                                                className="control-group control-group--granularity",
+                                                children=[
+                                                    html.Label("Granularity", className="control-label"),
+                                                    dcc.RadioItems(
+                                                        id="granularity-radio",
+                                                        className="granularity-pills",
+                                                        options=[
+                                                            {"label": "Day",   "value": "day"},
+                                                            {"label": "Week",  "value": Granularity.WEEK.label},
+                                                            {"label": "Month", "value": Granularity.MONTH.label},
+                                                        ],
+                                                        value="day",
+                                                        inline=True,
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            html.Div(className="card card--flush", children=[
+                                dcc.Graph(id="chart-temperature", config={"displayModeBar": False}),
+                            ]),
+                            html.Div(className="card card--flush", children=[
+                                dcc.Graph(id="chart-precipitation", config={"displayModeBar": False}),
+                            ]),
+                            html.Div(className="card card--flush", children=[
+                                dcc.Graph(id="chart-wind", config={"displayModeBar": False}),
+                            ]),
+                        ],
+                    ),
+                    dcc.Tab(
+                        label="Yearly extremes",
+                        value="yearly-extremes",
+                        children=[
+                            html.Div(
+                                className="card",
+                                children=[
+                                    dcc.Checklist(
+                                        id="yearly-trend-toggle",
+                                        options=[{"label": "  Show tendency lines", "value": "show"}],
+                                        value=[],
+                                        inline=True,
+                                    ),
+                                ],
+                            ),
+                            html.Div(className="card card--flush", children=[
+                                dcc.Graph(id="chart-hot-cold-yearly", config={"displayModeBar": False}),
+                            ]),
+                        ],
+                    ),
+                    dcc.Tab(
+                        label="Monthly averages",
+                        value="monthly-avg",
+                        children=[
+                            html.Div(className="card card--flush", children=[
+                                dcc.Graph(id="chart-monthly-avg-temp", config={"displayModeBar": False}),
+                            ]),
+                            html.Div(className="card card--flush", children=[
+                                dcc.Graph(id="chart-monthly-avg-temp-decade", config={"displayModeBar": False}),
+                            ]),
+                        ],
+                    ),
+                ],
+            ),
         ],
     )
 
@@ -148,30 +197,31 @@ def layout(search: str = "") -> html.Div:
 # ---------------------------------------------------------------------------
 
 
-def update_charts(
-    station_id: int | None,
-    year_range: list[int],
-    dept: str | None,
-    granularity_value: str,
-) -> tuple:
+def _filtered_station_df(station_id: int | None, year_range: list[int], dept: str | None) -> pl.DataFrame | None:
+    """Return a station+year-filtered DataFrame, or None if inputs are invalid / no data."""
     if dept is None or station_id is None:
-        placeholder = empty_figure("No data available")
-        return placeholder, placeholder, placeholder
-
-    df_full = _load_cached(dept)
+        return None
+    df_full = load_department_cached(dept)
     if df_full is None:
-        placeholder = empty_figure("No data available")
-        return placeholder, placeholder, placeholder
-
+        return None
     year_start, year_end = year_range
     df = df_full.filter(
         (pl.col("station_id") == station_id)
         & (pl.col("DATE").dt.year() >= year_start)
         & (pl.col("DATE").dt.year() <= year_end)
     )
+    return df if not df.is_empty() else None
 
-    if df.is_empty():
-        placeholder = empty_figure("No data for this station / period")
+
+def update_charts(
+    station_id: int | None,
+    year_range: list[int],
+    dept: str | None,
+    granularity_value: str,
+) -> tuple:
+    df = _filtered_station_df(station_id, year_range, dept)
+    if df is None:
+        placeholder = empty_figure("No data available")
         return placeholder, placeholder, placeholder
 
     granularity: Truncated | None = granularity_from(granularity_value)
@@ -185,6 +235,37 @@ def update_charts(
     )
 
 
+def update_yearly_chart(
+    station_id: int | None,
+    year_range: list[int],
+    dept: str | None,
+    trend_values: list[str] | None,
+) -> go.Figure:
+    """Render the yearly hot/cold days chart, with optional trend lines."""
+    df = _filtered_station_df(station_id, year_range, dept)
+    if df is None:
+        return empty_figure("No data available")
+    show_trend = "show" in (trend_values or [])
+    return hot_cold_yearly_figure(df, df["station_name"][0], show_trend=show_trend)
+
+
+def update_monthly_charts(
+    station_id: int | None,
+    year_range: list[int],
+    dept: str | None,
+) -> tuple:
+    """Render the two monthly average temperature charts."""
+    df = _filtered_station_df(station_id, year_range, dept)
+    if df is None:
+        placeholder = empty_figure("No data available")
+        return placeholder, placeholder
+    station_name = df["station_name"][0]
+    return (
+        monthly_avg_temp_figure(df, station_name),
+        monthly_avg_temp_by_decade_figure(df, station_name),
+    )
+
+
 def register_callbacks(app: Dash) -> None:
     app.callback(
         Output("chart-temperature", "figure"),
@@ -195,3 +276,19 @@ def register_callbacks(app: Dash) -> None:
         State("dept-store", "data"),
         Input("granularity-radio", "value"),
     )(update_charts)
+
+    app.callback(
+        Output("chart-hot-cold-yearly", "figure"),
+        Input("station-dropdown", "value"),
+        Input("year-slider", "value"),
+        State("dept-store", "data"),
+        Input("yearly-trend-toggle", "value"),
+    )(update_yearly_chart)
+
+    app.callback(
+        Output("chart-monthly-avg-temp", "figure"),
+        Output("chart-monthly-avg-temp-decade", "figure"),
+        Input("station-dropdown", "value"),
+        Input("year-slider", "value"),
+        State("dept-store", "data"),
+    )(update_monthly_charts)
