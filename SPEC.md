@@ -95,10 +95,13 @@ Multi-page routing via `dcc.Location` + a top-level callback in `app.py` that re
 ### Station detail page (`/station?dept=…&station=…`)
 - Back-to-map link at the top
 - Station dropdown (all stations in the department) — changing it updates the URL
-- Year range slider
+- Year range slider — default window: last 20 years
+- Three tabs: **Daily charts**, **Yearly extremes**, **Monthly averages**
+- Department data loaded lazily on first visit, cached server-side in `_dept_cache`
+
+#### Daily charts tab
 - Granularity radio (Day / Week / Month) — default Day
 - Three charts: temperature band, precipitation bar, wind lines
-- Department data loaded lazily on first visit, cached server-side in `_dept_cache`
 
 #### Temporal aggregation
 When Week or Month is selected, daily rows are grouped by truncated date period and all
@@ -106,6 +109,17 @@ numeric measurement columns (`temp_min`, `temp_max`, `temp_amplitude`,
 `precipitation`, `wind_mean`, `wind_gust`) are averaged (`mean`). Metadata columns
 (`lat`, `lon`, `altitude`) keep their first value (constant per station). Chart titles
 gain a suffix: ` (weekly avg)` or ` (monthly avg)`.
+
+#### Yearly extremes tab
+- Bar chart: yearly count of hot days (Tmin ≥ 20 °C and Tmax ≥ 35 °C) and cold days (Tmin < 0 °C)
+- Current (incomplete) year excluded from the chart so partial counts don't skew trends
+- Optional tendency lines (OLS linear regression) toggled via a checklist
+- When trends are shown: slope and R² appear both as a hover tooltip on each trend trace
+  and in a summary card below the chart
+
+#### Monthly averages tab
+- Average Tmin / Tmax by month of year
+- Average Tmin / Tmax by month of year, broken down by decade
 
 ## Architecture Decisions
 - **Station index**: pre-built JSON committed to repo; never fetched at runtime by the app
@@ -118,16 +132,7 @@ gain a suffix: ` (weekly avg)` or ` (monthly avg)`.
 - **Temporal aggregation**: `aggregate(df, granularity)` in `data_loader.py`; called in
   `station_page.update_charts` after the station/year filter. `Granularity.DAY` is the
   identity (returns df unchanged). Week uses `dt.truncate("1w")`, month uses `"1mo"`.
+- **Trend statistics**: `_linear_trend` in `charts.py` returns `(slope, intercept, r_squared)`.
+  Slope and R² are surfaced in two places: hover tooltip on the trend trace, and a summary
+  card rendered below the yearly extremes chart via a second Dash `Output`.
 
-## Development Plan
-1. ✅ Schema exploration
-2. ✅ Project setup
-3. ✅ Data loader — fetch, cache, parse, merge, rename columns
-4. ✅ Single-dept Dash app — station dropdown, year slider, 3 charts
-5. ✅ Expand to all departments — dept dropdown, lazy server-side cache
-6. ✅ Unit tests — pytest + coverage (src/ at 89%)
-7. `scripts/build_station_index.py` — generate `data/stations.json`
-8. Refactor `app.py` into `src/pages/map_page.py` + `src/pages/station_page.py`
-9. Multi-page routing in `app.py` via `dcc.Location`
-10. Map page — `px.scatter_mapbox`, hover info, click → navigate
-11. Station page — back link, URL-driven station selection
