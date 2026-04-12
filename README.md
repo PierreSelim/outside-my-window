@@ -34,3 +34,25 @@ The landing page is a map of all stations. Click a station to view its temperatu
 ```bash
 uv run pytest tests/ --cov=src --cov-report=term-missing
 ```
+
+## Features
+
+### Station map
+Browse all Météo-France stations across metropolitan France and overseas departments. Click any marker to navigate directly to that station's history.
+
+![Station map](docs/screenshots/outside-my-window_station_map.png)
+
+### Daily observations
+Explore daily temperature (min/max band), precipitation, and wind for any station and year range. Switch between daily, weekly, and monthly granularity.
+
+![Daily observations](docs/screenshots/outside-my-window_station_observation.png)
+
+### Yearly extremes
+Track hot days (Tmin ≥ 20 °C and Tmax ≥ 35 °C) and cold days (Tmin < 0 °C) year by year. Optional trend lines show the long-term evolution with slope and R².
+
+![Yearly extremes](docs/screenshots/outside-my-window_station_extremes.png)
+
+### Monthly averages
+Compare average Tmin and Tmax by month of year, either over the full record or broken down by decade to visualise long-term shifts.
+
+![Monthly averages](docs/screenshots/outside-my-window_station_averages.png)
