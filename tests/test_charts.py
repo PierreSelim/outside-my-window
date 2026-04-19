@@ -7,7 +7,6 @@ import plotly.graph_objects as go
 import pytest
 
 from src.charts import (
-    _linear_trend,
     empty_figure,
     hot_cold_yearly_figure,
     monthly_avg_temp_by_decade_figure,
@@ -16,6 +15,7 @@ from src.charts import (
     temperature_figure,
     wind_figure,
 )
+from src.transforms import linear_trend
 
 
 # ---------------------------------------------------------------------------
@@ -161,11 +161,6 @@ def test_empty_figure_axes_hidden() -> None:
 
 
 # ---------------------------------------------------------------------------
-# temperature_figure — band consistency
-# ---------------------------------------------------------------------------
-
-
-# ---------------------------------------------------------------------------
 # hot_cold_yearly_figure
 # ---------------------------------------------------------------------------
 
@@ -244,34 +239,34 @@ def test_hot_cold_yearly_figure_trend_same_x_as_data(multi_decade_df: pl.DataFra
 
 
 def test_linear_trend_perfect_slope() -> None:
-    slope, intercept, r_squared = _linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
-    assert abs(slope - 2.0) < 1e-9
-    assert abs(intercept - 0.0) < 1e-9
-    assert abs(r_squared - 1.0) < 1e-9
+    result = linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
+    assert abs(result.slope - 2.0) < 1e-9
+    assert abs(result.intercept - 0.0) < 1e-9
+    assert abs(result.r_squared - 1.0) < 1e-9
 
 
 def test_linear_trend_flat() -> None:
-    slope, intercept, r_squared = _linear_trend([1.0, 2.0, 3.0], [5.0, 5.0, 5.0])
-    assert abs(slope) < 1e-9
-    assert abs(intercept - 5.0) < 1e-9
-    assert r_squared == 0.0
+    result = linear_trend([1.0, 2.0, 3.0], [5.0, 5.0, 5.0])
+    assert abs(result.slope) < 1e-9
+    assert abs(result.intercept - 5.0) < 1e-9
+    assert result.r_squared == 0.0
 
 
 def test_linear_trend_single_point_returns_zero_slope() -> None:
-    slope, intercept, r_squared = _linear_trend([2020.0], [10.0])
-    assert slope == 0.0
-    assert intercept == 10.0
-    assert r_squared == 0.0
+    result = linear_trend([2020.0], [10.0])
+    assert result.slope == 0.0
+    assert result.intercept == 10.0
+    assert result.r_squared == 0.0
 
 
 def test_linear_trend_stable_with_large_x() -> None:
     """Centered OLS must not lose precision for year-scale x values."""
     x = [2000.0, 2010.0, 2020.0]
     y = [2000.0, 2010.0, 2020.0]  # slope=1, intercept=0
-    slope, intercept, r_squared = _linear_trend(x, y)
-    assert abs(slope - 1.0) < 1e-9
-    assert abs(intercept) < 1e-6
-    assert abs(r_squared - 1.0) < 1e-9
+    result = linear_trend(x, y)
+    assert abs(result.slope - 1.0) < 1e-9
+    assert abs(result.intercept) < 1e-6
+    assert abs(result.r_squared - 1.0) < 1e-9
 
 
 def test_hot_cold_yearly_figure_x_axis_is_years(sample_df: pl.DataFrame) -> None:

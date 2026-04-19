@@ -180,7 +180,7 @@ def multi_week_df() -> pl.DataFrame:
 
 
 def test_aggregate_day_is_identity(sample_df: pl.DataFrame) -> None:
-    result = aggregate(sample_df, None)
+    result = aggregate(sample_df, Granularity.DAY)
     assert result is sample_df
 
 
@@ -232,33 +232,41 @@ def test_aggregate_week_date_is_week_start(multi_week_df: pl.DataFrame) -> None:
     assert toulouse["DATE"][0] == date(2020, 1, 6)
 
 
-def test_truncated_fields() -> None:
+def test_granularity_week_fields() -> None:
     assert Granularity.WEEK.label == "week"
     assert Granularity.WEEK.truncate_expr == "1w"
     assert Granularity.WEEK.title_suffix == " (weekly avg)"
+
+
+def test_granularity_month_fields() -> None:
     assert Granularity.MONTH.label == "month"
     assert Granularity.MONTH.truncate_expr == "1mo"
     assert Granularity.MONTH.title_suffix == " (monthly avg)"
 
 
-def test_granularity_day_is_none() -> None:
-    assert Granularity.DAY is None
+def test_granularity_day_is_identity() -> None:
+    assert Granularity.DAY.truncate_expr == ""
+    assert Granularity.DAY.title_suffix == ""
 
 
-def test_granularity_from_returns_truncated_for_week() -> None:
+def test_granularity_from_returns_granularity_for_week() -> None:
     result = granularity_from("week")
-    assert isinstance(result, Truncated)
+    assert isinstance(result, Granularity)
     assert result is Granularity.WEEK
 
 
-def test_granularity_from_returns_truncated_for_month() -> None:
+def test_granularity_from_returns_granularity_for_month() -> None:
     result = granularity_from("month")
-    assert isinstance(result, Truncated)
+    assert isinstance(result, Granularity)
     assert result is Granularity.MONTH
 
 
-def test_granularity_from_returns_none_for_day() -> None:
-    assert granularity_from("day") is None
+def test_granularity_from_returns_day_for_day_string() -> None:
+    assert granularity_from("day") is Granularity.DAY
+
+
+def test_granularity_from_returns_day_for_unknown() -> None:
+    assert granularity_from("unknown") is Granularity.DAY
 
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,8 @@ _SAMPLE_STATIONS = [
 
 @pytest.fixture(autouse=True)
 def patch_stations(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(map_page, "_STATIONS", _SAMPLE_STATIONS)
+    map_page._load_stations.cache_clear()
+    monkeypatch.setattr(map_page, "_load_stations", lambda: _SAMPLE_STATIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +46,7 @@ def test_map_figure_customdata_contains_dept_and_station_id() -> None:
 
 
 def test_map_figure_no_stations_returns_annotation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(map_page, "_STATIONS", [])
+    monkeypatch.setattr(map_page, "_load_stations", lambda: [])
     fig = _map_figure()
     assert len(fig.data) == 0
     assert len(fig.layout.annotations) == 1

@@ -8,7 +8,6 @@ import polars as pl
 from dash import Dash, Input, Output, State, dcc, html
 
 from src.charts import (
-    _linear_trend,
     empty_figure,
     hot_cold_yearly_figure,
     monthly_avg_temp_by_decade_figure,
@@ -17,14 +16,26 @@ from src.charts import (
     temperature_figure,
     wind_figure,
 )
-from src.data_loader import Granularity, Station, Truncated, aggregate, granularity_from, load_department_cached, stations_from
+from src.data_loader import (
+    Granularity, Station,
+    aggregate, granularity_from, load_department_cached, stations_from,
+)
 from src.departments import DEPT_NAMES
+from src.transforms import LinearTrend, linear_trend, yearly_hot_cold
 
 _DEFAULT_YEAR_WINDOW: int = 20
+_NO_DATA = "No data available"
+
 
 # ---------------------------------------------------------------------------
-# Layout
+# Layout helpers
 # ---------------------------------------------------------------------------
+
+
+def _chart_card(graph_id: str) -> html.Div:
+    return html.Div(className="card card--flush", children=[
+        dcc.Graph(id=graph_id, config={"displayModeBar": False}),
+    ])
 
 
 def layout(search: str = "") -> html.Div:
@@ -52,13 +63,11 @@ def layout(search: str = "") -> html.Div:
         initial_station = stations[0].station_id if stations else None
 
     station_options = [{"label": s.name, "value": s.station_id} for s in stations]
-
     dept_label = f"{DEPT_NAMES.get(dept, dept)} ({dept})" if dept else ""
 
     return html.Div(
         className="page-container",
         children=[
-            # Navigation breadcrumb
             html.Div(
                 className="page-nav",
                 children=[
@@ -67,11 +76,7 @@ def layout(search: str = "") -> html.Div:
                     html.Span(dept_label, className="page-nav-dept"),
                 ],
             ),
-
-            # Store dept for use in update_charts
             dcc.Store(id="dept-store", data=dept),
-
-            # Controls card — station and year range apply to all tabs
             html.Div(
                 className="card",
                 children=[
@@ -109,8 +114,6 @@ def layout(search: str = "") -> html.Div:
                     ),
                 ],
             ),
-
-            # Tabbed chart area
             dcc.Tabs(
                 id="station-tabs",
                 value="observations",
@@ -119,7 +122,6 @@ def layout(search: str = "") -> html.Div:
                         label="Observations",
                         value="observations",
                         children=[
-                            # Granularity control — only meaningful for this tab
                             html.Div(
                                 className="card",
                                 children=[
@@ -134,11 +136,11 @@ def layout(search: str = "") -> html.Div:
                                                         id="granularity-radio",
                                                         className="granularity-pills",
                                                         options=[
-                                                            {"label": "Day",   "value": "day"},
+                                                            {"label": "Day",   "value": Granularity.DAY.label},
                                                             {"label": "Week",  "value": Granularity.WEEK.label},
                                                             {"label": "Month", "value": Granularity.MONTH.label},
                                                         ],
-                                                        value="day",
+                                                        value=Granularity.DAY.label,
                                                         inline=True,
                                                     ),
                                                 ],
@@ -147,15 +149,9 @@ def layout(search: str = "") -> html.Div:
                                     ),
                                 ],
                             ),
-                            html.Div(className="card card--flush", children=[
-                                dcc.Graph(id="chart-temperature", config={"displayModeBar": False}),
-                            ]),
-                            html.Div(className="card card--flush", children=[
-                                dcc.Graph(id="chart-precipitation", config={"displayModeBar": False}),
-                            ]),
-                            html.Div(className="card card--flush", children=[
-                                dcc.Graph(id="chart-wind", config={"displayModeBar": False}),
-                            ]),
+                            _chart_card("chart-temperature"),
+                            _chart_card("chart-precipitation"),
+                            _chart_card("chart-wind"),
                         ],
                     ),
                     dcc.Tab(
@@ -173,9 +169,7 @@ def layout(search: str = "") -> html.Div:
                                     ),
                                 ],
                             ),
-                            html.Div(className="card card--flush", children=[
-                                dcc.Graph(id="chart-hot-cold-yearly", config={"displayModeBar": False}),
-                            ]),
+                            _chart_card("chart-hot-cold-yearly"),
                             html.Div(id="trend-stats"),
                         ],
                     ),
@@ -183,12 +177,8 @@ def layout(search: str = "") -> html.Div:
                         label="Monthly averages",
                         value="monthly-avg",
                         children=[
-                            html.Div(className="card card--flush", children=[
-                                dcc.Graph(id="chart-monthly-avg-temp", config={"displayModeBar": False}),
-                            ]),
-                            html.Div(className="card card--flush", children=[
-                                dcc.Graph(id="chart-monthly-avg-temp-decade", config={"displayModeBar": False}),
-                            ]),
+                            _chart_card("chart-monthly-avg-temp"),
+                            _chart_card("chart-monthly-avg-temp-decade"),
                         ],
                     ),
                 ],
@@ -226,17 +216,16 @@ def update_charts(
 ) -> tuple:
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
-        placeholder = empty_figure("No data available")
+        placeholder = empty_figure(_NO_DATA)
         return placeholder, placeholder, placeholder
 
-    granularity: Truncated | None = granularity_from(granularity_value)
+    granularity: Granularity = granularity_from(granularity_value)
     df = aggregate(df, granularity)
-    label = granularity.title_suffix if granularity else ""
     station_name = df["station_name"][0]
     return (
-        temperature_figure(df, station_name, label),
-        precipitation_figure(df, station_name, label),
-        wind_figure(df, station_name, label),
+        temperature_figure(df, station_name, granularity),
+        precipitation_figure(df, station_name, granularity),
+        wind_figure(df, station_name, granularity),
     )
 
 
@@ -253,11 +242,11 @@ def update_yearly_chart(
     """
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
-        return empty_figure("No data available"), []
+        return empty_figure(_NO_DATA), []
     current_year = datetime.date.today().year
     df = df.filter(pl.col("DATE").dt.year() < current_year)
     if df.is_empty():
-        return empty_figure("No data available"), []
+        return empty_figure(_NO_DATA), []
 
     show_trend = "show" in (trend_values or [])
     fig = hot_cold_yearly_figure(df, df["station_name"][0], show_trend=show_trend)
@@ -265,30 +254,17 @@ def update_yearly_chart(
     if not show_trend:
         return fig, []
 
-    yearly = (
-        df.with_columns(pl.col("DATE").dt.year().alias("year"))
-        .group_by("year")
-        .agg([
-            (
-                pl.col("temp_min").is_not_null()
-                & pl.col("temp_max").is_not_null()
-                & (pl.col("temp_min") >= 20.0)
-                & (pl.col("temp_max") >= 35.0)
-            ).sum().alias("hot_days"),
-            (pl.col("temp_min").is_not_null() & (pl.col("temp_min") < 0)).sum().alias("cold_days"),
-        ])
-        .sort("year")
-    )
-    years_f = [float(y) for y in yearly["year"].to_list()]
+    agg = yearly_hot_cold(df)
+    years_f = [float(y) for y in agg["year"].to_list()]
 
     rows = []
     for label, col in [("Hot days", "hot_days"), ("Cold days", "cold_days")]:
-        slope, _, r_squared = _linear_trend(years_f, yearly[col].to_list())
-        sign = "+" if slope >= 0 else "−"
+        trend: LinearTrend = linear_trend(years_f, agg[col].to_list())
+        sign = "+" if trend.slope >= 0 else "−"
         rows.append(html.Tr([
             html.Td(label, style={"paddingRight": "1.5rem"}),
-            html.Td(f"{sign}{abs(slope):.2f} days/yr", style={"paddingRight": "1.5rem"}),
-            html.Td(f"R² = {r_squared:.2f}"),
+            html.Td(f"{sign}{abs(trend.slope):.2f} days/yr", style={"paddingRight": "1.5rem"}),
+            html.Td(f"R² = {trend.r_squared:.2f}"),
         ]))
 
     stats_card = html.Div(
@@ -309,7 +285,7 @@ def update_monthly_charts(
     """Render the two monthly average temperature charts."""
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
-        placeholder = empty_figure("No data available")
+        placeholder = empty_figure(_NO_DATA)
         return placeholder, placeholder
     station_name = df["station_name"][0]
     return (

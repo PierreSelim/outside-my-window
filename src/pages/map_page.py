@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -10,17 +11,16 @@ from dash.exceptions import PreventUpdate
 _STATION_INDEX = Path(__file__).parent.parent.parent / "data" / "stations.json"
 
 
+@lru_cache(maxsize=1)
 def _load_stations() -> list[dict]:
     if not _STATION_INDEX.exists():
         return []
     return json.loads(_STATION_INDEX.read_text(encoding="utf-8"))
 
 
-_STATIONS: list[dict] = _load_stations()
-
-
 def _map_figure() -> go.Figure:
-    if not _STATIONS:
+    stations = _load_stations()
+    if not stations:
         fig = go.Figure()
         fig.update_layout(
             annotations=[{
@@ -33,12 +33,12 @@ def _map_figure() -> go.Figure:
 
     fig = go.Figure(
         go.Scattermap(
-            lat=[s["lat"] for s in _STATIONS],
-            lon=[s["lon"] for s in _STATIONS],
+            lat=[s["lat"] for s in stations],
+            lon=[s["lon"] for s in stations],
             mode="markers",
             marker={"size": 7, "color": "#4C9BE8", "opacity": 0.75},
-            text=[s["station_name"] for s in _STATIONS],
-            customdata=[[s["dept"], s["station_id"], s["altitude"]] for s in _STATIONS],
+            text=[s["station_name"] for s in stations],
+            customdata=[[s["dept"], s["station_id"], s["altitude"]] for s in stations],
             hovertemplate=(
                 "<b>%{text}</b><br>"
                 "Département : %{customdata[0]}<br>"
