@@ -16,6 +16,25 @@ _GREEN = "#5CB85C"
 _GREY = "#AAAAAA"
 _BAND_FILL = "rgba(76, 155, 232, 0.15)"
 
+# ---------------------------------------------------------------------------
+# Grid / axis style helpers
+# ---------------------------------------------------------------------------
+
+_YAXIS_GRID: dict = {
+    "showgrid": True,
+    "gridcolor": "rgba(180,180,180,0.4)",
+    "gridwidth": 0.5,
+    "zeroline": True,
+    "zerolinecolor": "rgba(150,150,150,0.6)",
+    "zerolinewidth": 1,
+    "minor": {"showgrid": True, "gridcolor": "rgba(210,210,210,0.25)", "gridwidth": 0.5},
+}
+_XAXIS_GRID: dict = {
+    "showgrid": True,
+    "gridcolor": "rgba(180,180,180,0.4)",
+    "gridwidth": 0.5,
+}
+
 # Hot day: temp_min ≥ 20 °C AND temp_max ≥ 35 °C
 _HOT_DAY_TMIN: float = 20.0
 _HOT_DAY_TMAX: float = 35.0
@@ -93,7 +112,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
             x=dates,
             y=temp_max,
             name="Max",
-            line={"color": _RED, "width": 1},
+            line={"color": _RED, "width": 0.75},
             mode="lines",
         )
     )
@@ -104,7 +123,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
             x=dates,
             y=temp_min,
             name="Min",
-            line={"color": _BLUE, "width": 1},
+            line={"color": _BLUE, "width": 0.75},
             fill="tonexty",
             fillcolor=_BAND_FILL,
             mode="lines",
@@ -131,6 +150,7 @@ def temperature_figure(df: pl.DataFrame, station_name: str, granularity_label: s
         hovermode="x unified",
         margin={"t": 50, "b": 30},
     )
+    fig.update_yaxes(dtick=5, **_YAXIS_GRID)
     return fig
 
 
@@ -154,6 +174,7 @@ def precipitation_figure(df: pl.DataFrame, station_name: str, granularity_label:
         hovermode="x unified",
         margin={"t": 50, "b": 30},
     )
+    fig.update_yaxes(**_YAXIS_GRID)
     return fig
 
 
@@ -171,7 +192,7 @@ def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = ""
                 x=dates_gust,
                 y=gust,
                 name="Max gust",
-                line={"color": _RED, "width": 1},
+                line={"color": _RED, "width": 0.75},
                 mode="lines",
             )
         )
@@ -183,7 +204,7 @@ def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = ""
                 x=dates_mean,
                 y=mean,
                 name="Mean",
-                line={"color": _GREEN, "width": 1.5},
+                line={"color": _GREEN, "width": 1},
                 mode="lines",
             )
         )
@@ -196,6 +217,7 @@ def wind_figure(df: pl.DataFrame, station_name: str, granularity_label: str = ""
         hovermode="x unified",
         margin={"t": 50, "b": 30},
     )
+    fig.update_yaxes(dtick=5, **_YAXIS_GRID)
     return fig
 
 
@@ -250,8 +272,9 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
             x=years,
             y=hot_days,
             name=f"Hot days (Tmin≥{_HOT_DAY_TMIN:.0f}°C & Tmax≥{_HOT_DAY_TMAX:.0f}°C)",
-            line={"color": _RED, "width": 2, "shape": "spline"},
+            line={"color": _RED, "width": 1.5, "shape": "spline"},
             mode="lines+markers",
+            marker={"size": 4},
         )
     )
     fig.add_trace(
@@ -259,8 +282,9 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
             x=years,
             y=cold_days,
             name="Cold days (Tmin < 0°C)",
-            line={"color": _BLUE, "width": 2, "shape": "spline"},
+            line={"color": _BLUE, "width": 1.5, "shape": "spline"},
             mode="lines+markers",
+            marker={"size": 4},
         )
     )
     if show_trend and len(years_f) >= 2:
@@ -277,7 +301,7 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
                     x=years,
                     y=trend_y,
                     name=label,
-                    line={"color": color, "width": 1.5, "dash": "dash"},
+                    line={"color": color, "width": 1, "dash": "dash"},
                     mode="lines",
                     hovertemplate=hover,
                 )
@@ -289,6 +313,8 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
         hovermode="x unified",
         margin={"t": 50, "b": 30},
     )
+    fig.update_yaxes(dtick=5, **_YAXIS_GRID)
+    fig.update_xaxes(dtick=5, **_XAXIS_GRID)
     return fig
 
 
@@ -314,8 +340,9 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
             x=month_labels,
             y=monthly["avg_temp_max"].to_list(),
             name="Avg Tmax",
-            line={"color": _RED, "width": 2, "shape": "spline"},
+            line={"color": _RED, "width": 1.5, "shape": "spline"},
             mode="lines+markers",
+            marker={"size": 5},
         )
     )
     fig.add_trace(
@@ -323,8 +350,9 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
             x=month_labels,
             y=monthly["avg_temp_min"].to_list(),
             name="Avg Tmin",
-            line={"color": _BLUE, "width": 2, "shape": "spline"},
+            line={"color": _BLUE, "width": 1.5, "shape": "spline"},
             mode="lines+markers",
+            marker={"size": 5},
         )
     )
     fig.update_layout(
@@ -334,6 +362,7 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
         hovermode="x unified",
         margin={"t": 50, "b": 30},
     )
+    fig.update_yaxes(dtick=2, **_YAXIS_GRID)
     return fig
 
 
@@ -375,8 +404,9 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
                 x=month_labels,
                 y=sub["avg_temp_max"].to_list(),
                 name=f"{label} Tmax",
-                line={"color": tmax_color, "width": 2, "shape": "spline"},
+                line={"color": tmax_color, "width": 1.5, "shape": "spline"},
                 mode="lines+markers",
+                marker={"size": 4},
             )
         )
         fig.add_trace(
@@ -384,8 +414,9 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
                 x=month_labels,
                 y=sub["avg_temp_min"].to_list(),
                 name=f"{label} Tmin",
-                line={"color": tmin_color, "width": 2, "dash": "dash", "shape": "spline"},
+                line={"color": tmin_color, "width": 1.5, "dash": "dash", "shape": "spline"},
                 mode="lines+markers",
+                marker={"size": 4},
             )
         )
 
@@ -396,6 +427,7 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
         hovermode="x unified",
         margin={"t": 50, "b": 30},
     )
+    fig.update_yaxes(dtick=2, **_YAXIS_GRID)
     return fig
 
 
