@@ -117,10 +117,15 @@ def layout(search: str = "") -> html.Div:
             dcc.Tabs(
                 id="station-tabs",
                 value="observations",
+                className="station-tabs",
                 children=[
                     dcc.Tab(
                         label="Observations",
                         value="observations",
+                        className="station-tab",
+                        selected_className="station-tab station-tab--selected",
+                        style={},
+                        selected_style={},
                         children=[
                             html.Div(
                                 className="card",
@@ -157,6 +162,10 @@ def layout(search: str = "") -> html.Div:
                     dcc.Tab(
                         label="Yearly extremes",
                         value="yearly-extremes",
+                        className="station-tab",
+                        selected_className="station-tab station-tab--selected",
+                        style={},
+                        selected_style={},
                         children=[
                             html.Div(
                                 className="card",
@@ -176,6 +185,10 @@ def layout(search: str = "") -> html.Div:
                     dcc.Tab(
                         label="Monthly averages",
                         value="monthly-avg",
+                        className="station-tab",
+                        selected_className="station-tab station-tab--selected",
+                        style={},
+                        selected_style={},
                         children=[
                             _chart_card("chart-monthly-avg-temp"),
                             _chart_card("chart-monthly-avg-temp-decade"),

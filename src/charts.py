@@ -23,13 +23,13 @@ _HOT_DAY_FILL = "rgba(230, 80, 0, 0.15)"
 # Grid / axis style
 # ---------------------------------------------------------------------------
 
-_GRID_BASE: dict = {"showgrid": True, "gridcolor": "rgba(180,180,180,0.4)", "gridwidth": 0.5}
+_GRID_BASE: dict = {"showgrid": True, "gridcolor": "#E2E8F0", "gridwidth": 1}
 _YAXIS_GRID: dict = {
     **_GRID_BASE,
     "zeroline": True,
-    "zerolinecolor": "rgba(150,150,150,0.6)",
-    "zerolinewidth": 1,
-    "minor": {"showgrid": True, "gridcolor": "rgba(210,210,210,0.25)", "gridwidth": 0.5},
+    "zerolinecolor": "#CBD5E1",
+    "zerolinewidth": 1.5,
+    "minor": {"showgrid": True, "gridcolor": "rgba(226,232,240,0.5)", "gridwidth": 0.5},
 }
 _XAXIS_GRID: dict = {**_GRID_BASE}
 
@@ -48,6 +48,10 @@ _MONTH_SPINE: pl.DataFrame = pl.DataFrame({"month": list(range(1, 13))}, schema=
 # ---------------------------------------------------------------------------
 
 
+_FONT_FAMILY = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+_PLOT_BG = "rgba(248, 250, 252, 1)"
+
+
 def _apply_standard_layout(
     fig: go.Figure,
     title: str,
@@ -57,14 +61,21 @@ def _apply_standard_layout(
     **extra_layout: object,
 ) -> None:
     layout_kwargs: dict = {
-        "title": title,
+        "title": {"text": title, "font": {"size": 13, "weight": 600, "color": "#0F172A"}, "x": 0, "xanchor": "left", "pad": {"l": 4}},
         "yaxis_title": yaxis_title,
         "hovermode": "x unified",
-        "margin": {"t": 50, "b": 30},
+        "margin": {"t": 48, "b": 24, "l": 56, "r": 16},
+        "paper_bgcolor": "rgba(0,0,0,0)",
+        "plot_bgcolor": _PLOT_BG,
+        "font": {"family": _FONT_FAMILY, "size": 12, "color": "#374151"},
+        "hoverlabel": {"bgcolor": "#1E293B", "font_color": "#F8FAFC", "bordercolor": "#1E293B", "font_size": 12},
         **extra_layout,
     }
     if legend:
-        layout_kwargs["legend"] = {"orientation": "h", "y": 1.02, "x": 1, "xanchor": "right"}
+        layout_kwargs["legend"] = {
+            "orientation": "h", "y": 1.06, "x": 1, "xanchor": "right",
+            "font": {"size": 11}, "bgcolor": "rgba(0,0,0,0)", "borderwidth": 0,
+        }
     fig.update_layout(**layout_kwargs)
 
 
