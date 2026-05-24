@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, dcc, html
@@ -12,7 +13,7 @@ _STATION_INDEX = Path(__file__).parent.parent.parent / "data" / "stations.json"
 
 
 @lru_cache(maxsize=1)
-def _load_stations() -> list[dict]:
+def _load_stations() -> list[dict[str, Any]]:
     if not _STATION_INDEX.exists():
         return []
     return json.loads(_STATION_INDEX.read_text(encoding="utf-8"))
@@ -23,11 +24,15 @@ def _map_figure() -> go.Figure:
     if not stations:
         fig = go.Figure()
         fig.update_layout(
-            annotations=[{
-                "text": "Station index not found — run: uv run python scripts/build_station_index.py",
-                "showarrow": False, "font": {"size": 14},
-            }],
-            xaxis={"visible": False}, yaxis={"visible": False},
+            annotations=[
+                {
+                    "text": "Station index not found — run: uv run python scripts/build_station_index.py",
+                    "showarrow": False,
+                    "font": {"size": 14},
+                }
+            ],
+            xaxis={"visible": False},
+            yaxis={"visible": False},
         )
         return fig
 
@@ -40,10 +45,7 @@ def _map_figure() -> go.Figure:
             text=[s["station_name"] for s in stations],
             customdata=[[s["dept"], s["station_id"], s["altitude"]] for s in stations],
             hovertemplate=(
-                "<b>%{text}</b><br>"
-                "Département : %{customdata[0]}<br>"
-                "Altitude : %{customdata[2]} m"
-                "<extra></extra>"
+                "<b>%{text}</b><br>Département : %{customdata[0]}<br>Altitude : %{customdata[2]} m<extra></extra>"
             ),
         )
     )
@@ -68,7 +70,7 @@ def layout() -> html.Div:
     )
 
 
-def on_map_click(click_data: dict | None) -> str:
+def on_map_click(click_data: dict[str, Any] | None) -> str:
     if not click_data or "points" not in click_data:
         raise PreventUpdate
     point = click_data["points"][0]

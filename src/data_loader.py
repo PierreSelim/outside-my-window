@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 
 import polars as pl
@@ -13,8 +13,18 @@ CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
 
 # Columns we actually need for visualisation — the raw files have 60 columns
 KEEP_COLS: list[str] = [
-    "NUM_POSTE", "NOM_USUEL", "LAT", "LON", "ALTI", "AAAAMMJJ",
-    "RR", "TN", "TX", "TAMPLI", "FFM", "FXY",
+    "NUM_POSTE",
+    "NOM_USUEL",
+    "LAT",
+    "LON",
+    "ALTI",
+    "AAAAMMJJ",
+    "RR",
+    "TN",
+    "TX",
+    "TAMPLI",
+    "FFM",
+    "FXY",
 ]
 
 # Raw column names and their target types in _parse
@@ -25,15 +35,15 @@ _PARSE_INT_COLS: list[str] = ["NUM_POSTE", "ALTI"]
 COLUMN_RENAME: dict[str, str] = {
     "NUM_POSTE": "station_id",
     "NOM_USUEL": "station_name",
-    "LAT":       "lat",
-    "LON":       "lon",
-    "ALTI":      "altitude",
-    "TN":        "temp_min",
-    "TX":        "temp_max",
-    "TAMPLI":    "temp_amplitude",
-    "RR":        "precipitation",
-    "FFM":       "wind_mean",
-    "FXY":       "wind_gust",
+    "LAT": "lat",
+    "LON": "lon",
+    "ALTI": "altitude",
+    "TN": "temp_min",
+    "TX": "temp_max",
+    "TAMPLI": "temp_amplitude",
+    "RR": "precipitation",
+    "FFM": "wind_mean",
+    "FXY": "wind_gust",
 }
 
 # Hot-day thresholds shared across charts and analytics
@@ -41,7 +51,7 @@ HOT_DAY_TMIN: float = 20.0
 HOT_DAY_TMAX: float = 35.0
 
 
-class Period(str, Enum):
+class Period(StrEnum):
     HISTORICAL = "1852-1949"
     MODERN = "previous-1950-2024"
     LATEST = "latest-2025-2026"
@@ -67,8 +77,8 @@ class Granularity(Enum):
     daily rows to coarser periods by averaging numeric columns.
     """
 
-    DAY   = Truncated("day",   "",    "")
-    WEEK  = Truncated("week",  "1w",  " (weekly avg)")
+    DAY = Truncated("day", "", "")
+    WEEK = Truncated("week", "1w", " (weekly avg)")
     MONTH = Truncated("month", "1mo", " (monthly avg)")
 
     @property
@@ -105,8 +115,12 @@ class Station:
 
 
 _NUMERIC_COLS: list[str] = [
-    "temp_min", "temp_max", "temp_amplitude",
-    "precipitation", "wind_mean", "wind_gust",
+    "temp_min",
+    "temp_max",
+    "temp_amplitude",
+    "precipitation",
+    "wind_mean",
+    "wind_gust",
 ]
 _META_COLS: list[str] = ["lat", "lon", "altitude"]
 
@@ -159,12 +173,7 @@ def _parse(path: Path) -> pl.DataFrame | None:
             + [pl.col("AAAAMMJJ").cast(pl.String).str.to_date(format="%Y%m%d").alias("DATE")]
         )
         rename = {raw: readable for raw, readable in COLUMN_RENAME.items() if raw in df.columns}
-        return (
-            df.select(available)
-            .with_columns(cast_exprs)
-            .drop("AAAAMMJJ")
-            .rename(rename)
-        )
+        return df.select(available).with_columns(cast_exprs).drop("AAAAMMJJ").rename(rename)
     except (pl.exceptions.PolarsError, OSError):
         return None
 

@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import gzip
-import textwrap
 from pathlib import Path
 from unittest.mock import patch
 
 import polars as pl
 import pytest
 
-from src.data_loader import Granularity, Station, Truncated, _parse, aggregate, granularity_from, load_department, load_department_cached, stations_from
+from src.data_loader import (
+    Granularity,
+    Station,
+    _parse,
+    aggregate,
+    granularity_from,
+    load_department,
+    load_department_cached,
+    stations_from,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -139,6 +147,7 @@ def test_load_department_merges_periods(tmp_path: Path) -> None:
 # aggregate
 # ---------------------------------------------------------------------------
 
+
 # Multi-week fixture: station 31001 with 3 weeks of data (Mon–Sun blocks)
 # Week 1: 2020-01-06 (Mon) and 2020-01-07
 # Week 2: 2020-01-13
@@ -149,32 +158,32 @@ def multi_week_df() -> pl.DataFrame:
 
     return pl.DataFrame(
         {
-            "station_id":     [31001, 31001, 31001, 31002],
-            "station_name":   ["TOULOUSE", "TOULOUSE", "TOULOUSE", "BLAGNAC"],
-            "lat":            [43.60, 43.60, 43.60, 43.63],
-            "lon":            [1.44,  1.44,  1.44,  1.37],
-            "altitude":       [152,   152,   152,   151],
-            "DATE":           [date(2020, 1, 6), date(2020, 1, 7), date(2020, 1, 13), date(2020, 1, 6)],
-            "temp_min":       [0.0,   2.0,  4.0,  1.0],
-            "temp_max":       [8.0,  10.0, 12.0,  9.0],
-            "temp_amplitude": [8.0,   8.0,  8.0,  8.0],
-            "precipitation":  [1.0,   3.0,  2.0,  0.5],
-            "wind_mean":      [2.0,   4.0,  3.0,  None],
-            "wind_gust":      [5.0,  10.0,  7.0,  None],
+            "station_id": [31001, 31001, 31001, 31002],
+            "station_name": ["TOULOUSE", "TOULOUSE", "TOULOUSE", "BLAGNAC"],
+            "lat": [43.60, 43.60, 43.60, 43.63],
+            "lon": [1.44, 1.44, 1.44, 1.37],
+            "altitude": [152, 152, 152, 151],
+            "DATE": [date(2020, 1, 6), date(2020, 1, 7), date(2020, 1, 13), date(2020, 1, 6)],
+            "temp_min": [0.0, 2.0, 4.0, 1.0],
+            "temp_max": [8.0, 10.0, 12.0, 9.0],
+            "temp_amplitude": [8.0, 8.0, 8.0, 8.0],
+            "precipitation": [1.0, 3.0, 2.0, 0.5],
+            "wind_mean": [2.0, 4.0, 3.0, None],
+            "wind_gust": [5.0, 10.0, 7.0, None],
         },
         schema={
-            "station_id":     pl.Int32,
-            "station_name":   pl.String,
-            "lat":            pl.Float64,
-            "lon":            pl.Float64,
-            "altitude":       pl.Int32,
-            "DATE":           pl.Date,
-            "temp_min":       pl.Float64,
-            "temp_max":       pl.Float64,
+            "station_id": pl.Int32,
+            "station_name": pl.String,
+            "lat": pl.Float64,
+            "lon": pl.Float64,
+            "altitude": pl.Int32,
+            "DATE": pl.Date,
+            "temp_min": pl.Float64,
+            "temp_max": pl.Float64,
             "temp_amplitude": pl.Float64,
-            "precipitation":  pl.Float64,
-            "wind_mean":      pl.Float64,
-            "wind_gust":      pl.Float64,
+            "precipitation": pl.Float64,
+            "wind_mean": pl.Float64,
+            "wind_gust": pl.Float64,
         },
     )
 
@@ -212,7 +221,7 @@ def test_aggregate_month_averages_values(multi_week_df: pl.DataFrame) -> None:
     toulouse = result.filter(pl.col("station_id") == 31001).row(0, named=True)
     # Jan 6, 7, 13 → temp_min mean = (0+2+4)/3
     assert toulouse["temp_min"] == pytest.approx(2.0)
-    assert toulouse["wind_mean"] == pytest.approx(3.0)   # (2+4+3)/3
+    assert toulouse["wind_mean"] == pytest.approx(3.0)  # (2+4+3)/3
 
 
 def test_aggregate_preserves_null_columns(multi_week_df: pl.DataFrame) -> None:
@@ -276,6 +285,7 @@ def test_granularity_from_returns_day_for_unknown() -> None:
 
 def test_load_department_cached_calls_load_department(sample_df: pl.DataFrame) -> None:
     import src.data_loader as dl
+
     # Use a fresh dept key that is not already in the shared cache
     dl._dept_cache.pop("__test_dept__", None)
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
@@ -287,6 +297,7 @@ def test_load_department_cached_calls_load_department(sample_df: pl.DataFrame) -
 
 def test_load_department_cached_reuses_cache(sample_df: pl.DataFrame) -> None:
     import src.data_loader as dl
+
     dl._dept_cache.pop("__test_dept2__", None)
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
         load_department_cached("__test_dept2__")

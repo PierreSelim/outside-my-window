@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime
+from datetime import date as _date
+from typing import Any
 from urllib.parse import parse_qs
 
 import plotly.graph_objects as go
@@ -17,8 +19,12 @@ from src.charts import (
     wind_figure,
 )
 from src.data_loader import (
-    Granularity, Station,
-    aggregate, granularity_from, load_department_cached, stations_from,
+    Granularity,
+    Station,
+    aggregate,
+    granularity_from,
+    load_department_cached,
+    stations_from,
 )
 from src.departments import DEPT_NAMES
 from src.transforms import LinearTrend, linear_trend, yearly_hot_cold
@@ -33,9 +39,12 @@ _NO_DATA = "No data available"
 
 
 def _chart_card(graph_id: str) -> html.Div:
-    return html.Div(className="card card--flush", children=[
-        dcc.Graph(id=graph_id, config={"displayModeBar": False}),
-    ])
+    return html.Div(
+        className="card card--flush",
+        children=[
+            dcc.Graph(id=graph_id, config={"displayModeBar": False}),
+        ],
+    )
 
 
 def layout(search: str = "") -> html.Div:
@@ -54,8 +63,8 @@ def layout(search: str = "") -> html.Div:
 
     _date_min = df["DATE"].min() if df is not None else None
     _date_max = df["DATE"].max() if df is not None else None
-    year_min = _date_min.year if _date_min is not None else 1950
-    year_max = _date_max.year if _date_max is not None else 2026
+    year_min = _date_min.year if isinstance(_date_min, _date) else 1950
+    year_max = _date_max.year if isinstance(_date_max, _date) else 2026
     marks = {y: str(y) for y in range(year_min, year_max + 1, 10)}
 
     valid_ids = {s.station_id for s in stations}
@@ -141,8 +150,8 @@ def layout(search: str = "") -> html.Div:
                                                         id="granularity-radio",
                                                         className="granularity-pills",
                                                         options=[
-                                                            {"label": "Day",   "value": Granularity.DAY.label},
-                                                            {"label": "Week",  "value": Granularity.WEEK.label},
+                                                            {"label": "Day", "value": Granularity.DAY.label},
+                                                            {"label": "Week", "value": Granularity.WEEK.label},
                                                             {"label": "Month", "value": Granularity.MONTH.label},
                                                         ],
                                                         value=Granularity.DAY.label,
@@ -226,7 +235,7 @@ def update_charts(
     year_range: list[int],
     dept: str | None,
     granularity_value: str,
-) -> tuple:
+) -> tuple[go.Figure, go.Figure, go.Figure]:
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
         placeholder = empty_figure(_NO_DATA)
@@ -247,7 +256,7 @@ def update_yearly_chart(
     year_range: list[int],
     dept: str | None,
     trend_values: list[str] | None,
-) -> tuple[go.Figure, list]:
+) -> tuple[go.Figure, list[Any]]:
     """Render the yearly hot/cold days chart, with optional trend lines.
 
     The current (incomplete) year is excluded so partial counts don't skew the chart.
@@ -274,11 +283,15 @@ def update_yearly_chart(
     for label, col in [("Hot days", "hot_days"), ("Cold days", "cold_days")]:
         trend: LinearTrend = linear_trend(years_f, agg[col].to_list())
         sign = "+" if trend.slope >= 0 else "−"
-        rows.append(html.Tr([
-            html.Td(label, style={"paddingRight": "1.5rem"}),
-            html.Td(f"{sign}{abs(trend.slope):.2f} days/yr", style={"paddingRight": "1.5rem"}),
-            html.Td(f"R² = {trend.r_squared:.2f}"),
-        ]))
+        rows.append(
+            html.Tr(
+                [
+                    html.Td(label, style={"paddingRight": "1.5rem"}),
+                    html.Td(f"{sign}{abs(trend.slope):.2f} days/yr", style={"paddingRight": "1.5rem"}),
+                    html.Td(f"R² = {trend.r_squared:.2f}"),
+                ]
+            )
+        )
 
     stats_card = html.Div(
         className="card",
@@ -294,7 +307,7 @@ def update_monthly_charts(
     station_id: int | None,
     year_range: list[int],
     dept: str | None,
-) -> tuple:
+) -> tuple[go.Figure, go.Figure]:
     """Render the two monthly average temperature charts."""
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:

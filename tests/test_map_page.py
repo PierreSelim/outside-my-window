@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import plotly.graph_objects as go
 import pytest
-from dash import html, dcc
+from dash import dcc, html
 from dash.exceptions import PreventUpdate
 
 import src.pages.map_page as map_page
@@ -10,7 +10,7 @@ from src.pages.map_page import _map_figure, layout, on_map_click
 
 _SAMPLE_STATIONS = [
     {"station_id": 31001, "station_name": "TOULOUSE", "dept": "31", "lat": 43.6, "lon": 1.44, "altitude": 152},
-    {"station_id": 31002, "station_name": "BLAGNAC",  "dept": "31", "lat": 43.63, "lon": 1.37, "altitude": 151},
+    {"station_id": 31002, "station_name": "BLAGNAC", "dept": "31", "lat": 43.63, "lon": 1.37, "altitude": 151},
 ]
 
 

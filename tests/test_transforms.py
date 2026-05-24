@@ -7,7 +7,6 @@ import pytest
 
 from src.transforms import LinearTrend, linear_trend, yearly_hot_cold
 
-
 # ---------------------------------------------------------------------------
 # linear_trend
 # ---------------------------------------------------------------------------
@@ -67,11 +66,14 @@ def test_linear_trend_zero_variance_x_returns_mean() -> None:
 
 @pytest.fixture
 def daily_df() -> pl.DataFrame:
-    return pl.DataFrame({
-        "DATE": [date(2020, 1, 1), date(2020, 6, 1), date(2021, 7, 1), date(2021, 8, 1)],
-        "temp_min": [-1.0, 21.0, 0.5, 21.0],
-        "temp_max": [5.0,  36.0, 8.0, 36.0],
-    }, schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64})
+    return pl.DataFrame(
+        {
+            "DATE": [date(2020, 1, 1), date(2020, 6, 1), date(2021, 7, 1), date(2021, 8, 1)],
+            "temp_min": [-1.0, 21.0, 0.5, 21.0],
+            "temp_max": [5.0, 36.0, 8.0, 36.0],
+        },
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
 
 
 def test_yearly_hot_cold_returns_dataframe(daily_df: pl.DataFrame) -> None:

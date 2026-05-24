@@ -4,11 +4,13 @@
 Run once (or after the station network changes):
     uv run python scripts/build_station_index.py
 """
+
 from __future__ import annotations
 
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -19,7 +21,7 @@ OUTPUT = Path(__file__).parent.parent / "data" / "stations.json"
 
 
 def main() -> None:
-    all_stations: list[dict] = []
+    all_stations: list[dict[str, Any]] = []
     depts = list(DEPT_NAMES.keys())
 
     for i, dept in enumerate(depts, 1):
@@ -37,14 +39,16 @@ def main() -> None:
 
         stations = stations_from(df)
         for s in stations:
-            all_stations.append({
-                "station_id": s.num_poste,
-                "station_name": s.name,
-                "dept": dept,
-                "lat": s.lat,
-                "lon": s.lon,
-                "altitude": s.altitude,
-            })
+            all_stations.append(
+                {
+                    "station_id": s.station_id,
+                    "station_name": s.name,
+                    "dept": dept,
+                    "lat": s.lat,
+                    "lon": s.lon,
+                    "altitude": s.altitude,
+                }
+            )
         print(f"{len(stations)} stations")
 
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)

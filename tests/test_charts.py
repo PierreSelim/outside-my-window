@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 
-import polars as pl
 import plotly.graph_objects as go
+import polars as pl
 import pytest
 
 from src.charts import (
@@ -16,7 +16,6 @@ from src.charts import (
     wind_figure,
 )
 from src.transforms import linear_trend
-
 
 # ---------------------------------------------------------------------------
 # temperature_figure
@@ -47,12 +46,20 @@ def test_temperature_figure_title_contains_station(sample_df: pl.DataFrame) -> N
 @pytest.fixture
 def hot_day_df(sample_df: pl.DataFrame) -> pl.DataFrame:
     """sample_df with one day modified to meet the hot-day rule (Tmin≥20, Tmax≥35)."""
-    return sample_df.with_columns([
-        pl.when(pl.col("DATE") == date(2020, 1, 1))
-          .then(pl.lit(21.0)).otherwise(pl.col("temp_min")).cast(pl.Float64).alias("temp_min"),
-        pl.when(pl.col("DATE") == date(2020, 1, 1))
-          .then(pl.lit(36.0)).otherwise(pl.col("temp_max")).cast(pl.Float64).alias("temp_max"),
-    ])
+    return sample_df.with_columns(
+        [
+            pl.when(pl.col("DATE") == date(2020, 1, 1))
+            .then(pl.lit(21.0))
+            .otherwise(pl.col("temp_min"))
+            .cast(pl.Float64)
+            .alias("temp_min"),
+            pl.when(pl.col("DATE") == date(2020, 1, 1))
+            .then(pl.lit(36.0))
+            .otherwise(pl.col("temp_max"))
+            .cast(pl.Float64)
+            .alias("temp_max"),
+        ]
+    )
 
 
 def test_temperature_figure_no_hot_day_shapes(sample_df: pl.DataFrame) -> None:
@@ -80,10 +87,12 @@ def test_temperature_figure_no_legend_entry_without_hot_days(sample_df: pl.DataF
 
 
 def test_temperature_figure_multiple_hot_days_add_multiple_shapes(sample_df: pl.DataFrame) -> None:
-    df = sample_df.with_columns([
-        pl.lit(21.0).cast(pl.Float64).alias("temp_min"),
-        pl.lit(36.0).cast(pl.Float64).alias("temp_max"),
-    ])
+    df = sample_df.with_columns(
+        [
+            pl.lit(21.0).cast(pl.Float64).alias("temp_min"),
+            pl.lit(36.0).cast(pl.Float64).alias("temp_max"),
+        ]
+    )
     toulouse = df.filter(pl.col("station_id") == 31001)  # 3 rows → 3 hot days
     fig = temperature_figure(toulouse, "TOULOUSE")
     assert len(fig.layout.shapes) == 3
@@ -194,12 +203,20 @@ def test_hot_cold_yearly_figure_counts_hot_days(sample_df: pl.DataFrame) -> None
     """Inject one hot day (Tmin≥20, Tmax≥35) for a single station and verify count."""
     from datetime import date
 
-    df = sample_df.filter(pl.col("station_id") == 31001).with_columns([
-        pl.when(pl.col("DATE") == date(2020, 1, 1))
-          .then(pl.lit(21.0)).otherwise(pl.col("temp_min")).cast(pl.Float64).alias("temp_min"),
-        pl.when(pl.col("DATE") == date(2020, 1, 1))
-          .then(pl.lit(36.0)).otherwise(pl.col("temp_max")).cast(pl.Float64).alias("temp_max"),
-    ])
+    df = sample_df.filter(pl.col("station_id") == 31001).with_columns(
+        [
+            pl.when(pl.col("DATE") == date(2020, 1, 1))
+            .then(pl.lit(21.0))
+            .otherwise(pl.col("temp_min"))
+            .cast(pl.Float64)
+            .alias("temp_min"),
+            pl.when(pl.col("DATE") == date(2020, 1, 1))
+            .then(pl.lit(36.0))
+            .otherwise(pl.col("temp_max"))
+            .cast(pl.Float64)
+            .alias("temp_max"),
+        ]
+    )
     fig = hot_cold_yearly_figure(df, "TOULOUSE")
     hot_trace = next(t for t in fig.data if "hot" in t.name.lower())
     assert sum(hot_trace.y) == 1
@@ -322,7 +339,7 @@ def test_monthly_avg_temp_figure_tmax_above_tmin(sample_df: pl.DataFrame) -> Non
     fig = monthly_avg_temp_figure(sample_df, "TOULOUSE")
     tmax_trace = next(t for t in fig.data if "tmax" in t.name.lower())
     tmin_trace = next(t for t in fig.data if "tmin" in t.name.lower())
-    for tmax_val, tmin_val in zip(tmax_trace.y, tmin_trace.y):
+    for tmax_val, tmin_val in zip(tmax_trace.y, tmin_trace.y, strict=True):
         if tmax_val is not None and tmin_val is not None:
             assert tmax_val > tmin_val
 
@@ -336,9 +353,7 @@ def test_monthly_avg_temp_figure_tmax_above_tmin(sample_df: pl.DataFrame) -> Non
 def multi_decade_df(sample_df: pl.DataFrame) -> pl.DataFrame:
     """sample_df (year 2020) extended with identical rows shifted to 2010 to create two decades."""
     older = sample_df.with_columns(
-        pl.col("DATE")
-        .map_elements(lambda d: date(d.year - 10, d.month, d.day), return_dtype=pl.Date)
-        .alias("DATE")
+        pl.col("DATE").map_elements(lambda d: date(d.year - 10, d.month, d.day), return_dtype=pl.Date).alias("DATE")
     )
     return pl.concat([sample_df, older])
 
@@ -391,9 +406,11 @@ def test_monthly_avg_temp_by_decade_figure_newer_decade_redder_tmax(multi_decade
     fig = monthly_avg_temp_by_decade_figure(multi_decade_df, "TOULOUSE")
     tmax_2010 = next(t for t in fig.data if t.name == "2010s Tmax")
     tmax_2020 = next(t for t in fig.data if t.name == "2020s Tmax")
+
     # Parse "rgb(r,g,b)" and compare green channel: orange has more green than deep red
     def green(color: str) -> int:
         return int(color.split(",")[1].strip())
+
     assert green(tmax_2010.line.color) > green(tmax_2020.line.color)
 
 
@@ -402,9 +419,11 @@ def test_monthly_avg_temp_by_decade_figure_newer_decade_darker_tmin(multi_decade
     fig = monthly_avg_temp_by_decade_figure(multi_decade_df, "TOULOUSE")
     tmin_2010 = next(t for t in fig.data if t.name == "2010s Tmin")
     tmin_2020 = next(t for t in fig.data if t.name == "2020s Tmin")
+
     # Light blue has higher red channel than dark blue
     def red(color: str) -> int:
         return int(color.split(",")[0].replace("rgb(", "").strip())
+
     assert red(tmin_2010.line.color) > red(tmin_2020.line.color)
 
 

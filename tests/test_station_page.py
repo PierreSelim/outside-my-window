@@ -3,14 +3,11 @@ from __future__ import annotations
 from unittest.mock import patch
 
 import plotly.graph_objects as go
-import pytest
 from dash import dcc, html
 
-import src.pages.station_page as station_page
-from src.data_loader import Granularity, Truncated
+from src.data_loader import Granularity
 from src.pages.station_page import layout, update_charts, update_monthly_charts, update_yearly_chart
 from tests.conftest import find_component
-
 
 # ---------------------------------------------------------------------------
 # layout

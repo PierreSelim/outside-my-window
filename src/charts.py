@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import plotly.graph_objects as go
 import polars as pl
 
-from src.data_loader import HOT_DAY_TMIN, HOT_DAY_TMAX, Granularity
+from src.data_loader import HOT_DAY_TMAX, HOT_DAY_TMIN, Granularity
 from src.transforms import LinearTrend, linear_trend, yearly_hot_cold
 
 # ---------------------------------------------------------------------------
@@ -25,21 +26,21 @@ _TMIN_SIGMA_FILL = "rgba(76, 155, 232, 0.15)"
 # Grid / axis style
 # ---------------------------------------------------------------------------
 
-_GRID_BASE: dict = {"showgrid": True, "gridcolor": "#E2E8F0", "gridwidth": 1}
-_YAXIS_GRID: dict = {
+_GRID_BASE: dict[str, Any] = {"showgrid": True, "gridcolor": "#E2E8F0", "gridwidth": 1}
+_YAXIS_GRID: dict[str, Any] = {
     **_GRID_BASE,
     "zeroline": True,
     "zerolinecolor": "#CBD5E1",
     "zerolinewidth": 1.5,
     "minor": {"showgrid": True, "gridcolor": "rgba(226,232,240,0.5)", "gridwidth": 0.5},
 }
-_XAXIS_GRID: dict = {**_GRID_BASE}
+_XAXIS_GRID: dict[str, Any] = {**_GRID_BASE}
 
 # Decade chart gradients: oldest → newest
-_TMAX_GRADIENT_START: tuple[int, int, int] = (255, 140, 0)   # orange
-_TMAX_GRADIENT_END: tuple[int, int, int] = (160, 0, 0)        # deep red
+_TMAX_GRADIENT_START: tuple[int, int, int] = (255, 140, 0)  # orange
+_TMAX_GRADIENT_END: tuple[int, int, int] = (160, 0, 0)  # deep red
 _TMIN_GRADIENT_START: tuple[int, int, int] = (173, 216, 230)  # light blue
-_TMIN_GRADIENT_END: tuple[int, int, int] = (0, 0, 139)        # dark blue
+_TMIN_GRADIENT_END: tuple[int, int, int] = (0, 0, 139)  # dark blue
 
 _MONTH_LABELS: list[str] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _MONTH_SPINE: pl.DataFrame = pl.DataFrame({"month": list(range(1, 13))}, schema={"month": pl.UInt32})
@@ -62,8 +63,14 @@ def _apply_standard_layout(
     legend: bool = True,
     **extra_layout: object,
 ) -> None:
-    layout_kwargs: dict = {
-        "title": {"text": title, "font": {"size": 13, "weight": 600, "color": "#0F172A"}, "x": 0, "xanchor": "left", "pad": {"l": 4}},
+    layout_kwargs: dict[str, Any] = {
+        "title": {
+            "text": title,
+            "font": {"size": 13, "weight": 600, "color": "#0F172A"},
+            "x": 0,
+            "xanchor": "left",
+            "pad": {"l": 4},
+        },
         "yaxis_title": yaxis_title,
         "hovermode": "x unified",
         "margin": {"t": 48, "b": 24, "l": 56, "r": 16},
@@ -75,8 +82,13 @@ def _apply_standard_layout(
     }
     if legend:
         layout_kwargs["legend"] = {
-            "orientation": "h", "y": 1.06, "x": 1, "xanchor": "right",
-            "font": {"size": 11}, "bgcolor": "rgba(0,0,0,0)", "borderwidth": 0,
+            "orientation": "h",
+            "y": 1.06,
+            "x": 1,
+            "xanchor": "right",
+            "font": {"size": 11},
+            "bgcolor": "rgba(0,0,0,0)",
+            "borderwidth": 0,
         }
     fig.update_layout(**layout_kwargs)
 
@@ -89,17 +101,12 @@ def _gradient_color(t: float, start: tuple[int, int, int], end: tuple[int, int, 
     return f"rgb({r},{g},{b})"
 
 
-def _hot_day_dates(df: pl.DataFrame) -> list:
+def _hot_day_dates(df: pl.DataFrame) -> list[Any]:
     """Return dates where temp_min ≥ HOT_DAY_TMIN and temp_max ≥ HOT_DAY_TMAX."""
-    return (
-        df.filter(
-            (pl.col("temp_min") >= HOT_DAY_TMIN)
-            & (pl.col("temp_max") >= HOT_DAY_TMAX)
-        )["DATE"].to_list()
-    )
+    return df.filter((pl.col("temp_min") >= HOT_DAY_TMIN) & (pl.col("temp_max") >= HOT_DAY_TMAX))["DATE"].to_list()
 
 
-def _series(df: pl.DataFrame, col: str) -> tuple[list, list]:
+def _series(df: pl.DataFrame, col: str) -> tuple[list[Any], list[Any]]:
     """Return (dates, values) lists for a column, dropping nulls."""
     sub = df.filter(df[col].is_not_null())
     return sub["DATE"].to_list(), sub[col].to_list()
@@ -107,44 +114,63 @@ def _series(df: pl.DataFrame, col: str) -> tuple[list, list]:
 
 def _add_temp_trace(
     fig: go.Figure,
-    month_labels: list,
-    y: list,
+    month_labels: list[Any],
+    y: list[Any],
     name: str,
     color: str,
     dash: str = "",
 ) -> None:
-    line: dict = {"color": color, "width": 1.5, "shape": "spline"}
+    line: dict[str, Any] = {"color": color, "width": 1.5, "shape": "spline"}
     if dash:
         line["dash"] = dash
-    fig.add_trace(go.Scatter(
-        x=month_labels, y=y, name=name,
-        line=line, mode="lines+markers", marker={"size": 4},
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=month_labels,
+            y=y,
+            name=name,
+            line=line,
+            mode="lines+markers",
+            marker={"size": 4},
+        )
+    )
 
 
 def _add_sigma_band(
     fig: go.Figure,
-    x: list,
-    avg: list,
-    std: list,
+    x: list[Any],
+    avg: list[Any],
+    std: list[Any],
     fillcolor: str,
     n_sigma: float = 2.0,
 ) -> None:
     """Add a ±n_sigma shaded band using two invisible boundary traces."""
-    upper = [a + n_sigma * s if a is not None and s is not None else None for a, s in zip(avg, std)]
-    lower = [a - n_sigma * s if a is not None and s is not None else None for a, s in zip(avg, std)]
-    invisible_line: dict = {"color": "rgba(0,0,0,0)", "width": 0, "shape": "spline"}
-    fig.add_trace(go.Scatter(
-        x=x, y=upper, name="",
-        mode="lines", line=invisible_line,
-        showlegend=False, hoverinfo="skip",
-    ))
-    fig.add_trace(go.Scatter(
-        x=x, y=lower, name="",
-        mode="lines", line=invisible_line,
-        fill="tonexty", fillcolor=fillcolor,
-        showlegend=False, hoverinfo="skip",
-    ))
+    upper = [a + n_sigma * s if a is not None and s is not None else None for a, s in zip(avg, std, strict=True)]
+    lower = [a - n_sigma * s if a is not None and s is not None else None for a, s in zip(avg, std, strict=True)]
+    invisible_line: dict[str, Any] = {"color": "rgba(0,0,0,0)", "width": 0, "shape": "spline"}
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=upper,
+            name="",
+            mode="lines",
+            line=invisible_line,
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=lower,
+            name="",
+            mode="lines",
+            line=invisible_line,
+            fill="tonexty",
+            fillcolor=fillcolor,
+            showlegend=False,
+            hoverinfo="skip",
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -165,25 +191,40 @@ def temperature_figure(
     df_band = df.filter(pl.col("temp_min").is_not_null() & pl.col("temp_max").is_not_null())
     dates = df_band["DATE"].to_list()
 
-    fig.add_trace(go.Scatter(
-        x=dates, y=df_band["temp_max"].to_list(),
-        name="Max", line={"color": _RED, "width": 0.75}, mode="lines",
-    ))
-    fig.add_trace(go.Scatter(
-        x=dates, y=df_band["temp_min"].to_list(),
-        name="Min", line={"color": _BLUE, "width": 0.75},
-        fill="tonexty", fillcolor=_BAND_FILL, mode="lines",
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=df_band["temp_max"].to_list(),
+            name="Max",
+            line={"color": _RED, "width": 0.75},
+            mode="lines",
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=dates,
+            y=df_band["temp_min"].to_list(),
+            name="Min",
+            line={"color": _BLUE, "width": 0.75},
+            fill="tonexty",
+            fillcolor=_BAND_FILL,
+            mode="lines",
+        )
+    )
 
     hot_days = _hot_day_dates(df_band)
     for d in hot_days:
         fig.add_vrect(x0=d, x1=d + timedelta(days=1), fillcolor=_HOT_DAY_FILL, layer="below", line_width=0)
     if hot_days:
-        fig.add_trace(go.Scatter(
-            x=[None], y=[None], mode="markers",
-            marker={"color": _HOT_DAY_FILL, "size": 10, "symbol": "square"},
-            name=f"Hot day (Tmin≥{HOT_DAY_TMIN:.0f}°C, Tmax≥{HOT_DAY_TMAX:.0f}°C)",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker={"color": _HOT_DAY_FILL, "size": 10, "symbol": "square"},
+                name=f"Hot day (Tmin≥{HOT_DAY_TMIN:.0f}°C, Tmax≥{HOT_DAY_TMAX:.0f}°C)",
+            )
+        )
 
     _apply_standard_layout(fig, f"Temperature — {station_name}{granularity.title_suffix}", "°C")
     fig.update_yaxes(dtick=5, **_YAXIS_GRID)
@@ -197,13 +238,21 @@ def precipitation_figure(
 ) -> go.Figure:
     """Bar chart: daily precipitation."""
     dates, precip = _series(df, "precipitation")
-    fig = go.Figure(go.Bar(
-        x=dates, y=precip, name="Precipitation (mm)",
-        marker_color=_BLUE, marker_line_width=0,
-    ))
+    fig = go.Figure(
+        go.Bar(
+            x=dates,
+            y=precip,
+            name="Precipitation (mm)",
+            marker_color=_BLUE,
+            marker_line_width=0,
+        )
+    )
     _apply_standard_layout(
-        fig, f"Precipitation — {station_name}{granularity.title_suffix}", "mm",
-        legend=False, bargap=0,
+        fig,
+        f"Precipitation — {station_name}{granularity.title_suffix}",
+        "mm",
+        legend=False,
+        bargap=0,
     )
     fig.update_yaxes(**_YAXIS_GRID)
     return fig
@@ -222,16 +271,26 @@ def wind_figure(
 
     if has_gust:
         dates_gust, gust = _series(df, "wind_gust")
-        fig.add_trace(go.Scatter(
-            x=dates_gust, y=gust, name="Max gust",
-            line={"color": _RED, "width": 0.75}, mode="lines",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=dates_gust,
+                y=gust,
+                name="Max gust",
+                line={"color": _RED, "width": 0.75},
+                mode="lines",
+            )
+        )
     if has_mean:
         dates_mean, mean = _series(df, "wind_mean")
-        fig.add_trace(go.Scatter(
-            x=dates_mean, y=mean, name="Mean",
-            line={"color": _GREEN, "width": 1}, mode="lines",
-        ))
+        fig.add_trace(
+            go.Scatter(
+                x=dates_mean,
+                y=mean,
+                name="Mean",
+                line={"color": _GREEN, "width": 1},
+                mode="lines",
+            )
+        )
 
     no_data = not has_mean and not has_gust
     _apply_standard_layout(
@@ -252,17 +311,26 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
     years_f = [float(y) for y in years]
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=years, y=hot_days,
-        name=f"Hot days (Tmin≥{HOT_DAY_TMIN:.0f}°C & Tmax≥{HOT_DAY_TMAX:.0f}°C)",
-        line={"color": _RED, "width": 1.5, "shape": "spline"},
-        mode="lines+markers", marker={"size": 4},
-    ))
-    fig.add_trace(go.Scatter(
-        x=years, y=cold_days, name="Cold days (Tmin < 0°C)",
-        line={"color": _BLUE, "width": 1.5, "shape": "spline"},
-        mode="lines+markers", marker={"size": 4},
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=years,
+            y=hot_days,
+            name=f"Hot days (Tmin≥{HOT_DAY_TMIN:.0f}°C & Tmax≥{HOT_DAY_TMAX:.0f}°C)",
+            line={"color": _RED, "width": 1.5, "shape": "spline"},
+            mode="lines+markers",
+            marker={"size": 4},
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=years,
+            y=cold_days,
+            name="Cold days (Tmin < 0°C)",
+            line={"color": _BLUE, "width": 1.5, "shape": "spline"},
+            mode="lines+markers",
+            marker={"size": 4},
+        )
+    )
 
     if show_trend and len(years_f) >= 2:
         for label, counts, color in [
@@ -272,12 +340,19 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
             trend: LinearTrend = linear_trend(years_f, counts)
             trend_y = [trend.slope * y + trend.intercept for y in years_f]
             sign = "+" if trend.slope >= 0 else "−"
-            hover = f"{label}<br>slope: {sign}{abs(trend.slope):.2f} days/yr<br>R²: {trend.r_squared:.2f}<extra></extra>"
-            fig.add_trace(go.Scatter(
-                x=years, y=trend_y, name=label,
-                line={"color": color, "width": 1, "dash": "dash"},
-                mode="lines", hovertemplate=hover,
-            ))
+            hover = (
+                f"{label}<br>slope: {sign}{abs(trend.slope):.2f} days/yr<br>R²: {trend.r_squared:.2f}<extra></extra>"  # noqa: E501
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=years,
+                    y=trend_y,
+                    name=label,
+                    line={"color": color, "width": 1, "dash": "dash"},
+                    mode="lines",
+                    hovertemplate=hover,
+                )
+            )
 
     _apply_standard_layout(fig, f"Yearly extreme days — {station_name}", "Days")
     fig.update_yaxes(dtick=5, **_YAXIS_GRID)
@@ -290,13 +365,16 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
     monthly = _MONTH_SPINE.join(
         df.with_columns(pl.col("DATE").dt.month().alias("month"))
         .group_by("month")
-        .agg([
-            pl.col("temp_min").mean().alias("avg_temp_min"),
-            pl.col("temp_max").mean().alias("avg_temp_max"),
-            pl.col("temp_min").std().alias("std_temp_min"),
-            pl.col("temp_max").std().alias("std_temp_max"),
-        ]),
-        on="month", how="left",
+        .agg(
+            [
+                pl.col("temp_min").mean().alias("avg_temp_min"),
+                pl.col("temp_max").mean().alias("avg_temp_max"),
+                pl.col("temp_min").std().alias("std_temp_min"),
+                pl.col("temp_max").std().alias("std_temp_max"),
+            ]
+        ),
+        on="month",
+        how="left",
     )
     month_labels = [_MONTH_LABELS[m - 1] for m in monthly["month"].to_list()]
     avg_tmax = monthly["avg_temp_max"].to_list()
@@ -307,16 +385,26 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
     fig = go.Figure()
     _add_sigma_band(fig, month_labels, avg_tmax, std_tmax, _TMAX_SIGMA_FILL)
     _add_sigma_band(fig, month_labels, avg_tmin, std_tmin, _TMIN_SIGMA_FILL)
-    fig.add_trace(go.Scatter(
-        x=month_labels, y=avg_tmax, name="Avg Tmax",
-        line={"color": _RED, "width": 1.5, "shape": "spline"},
-        mode="lines+markers", marker={"size": 5},
-    ))
-    fig.add_trace(go.Scatter(
-        x=month_labels, y=avg_tmin, name="Avg Tmin",
-        line={"color": _BLUE, "width": 1.5, "shape": "spline"},
-        mode="lines+markers", marker={"size": 5},
-    ))
+    fig.add_trace(
+        go.Scatter(
+            x=month_labels,
+            y=avg_tmax,
+            name="Avg Tmax",
+            line={"color": _RED, "width": 1.5, "shape": "spline"},
+            mode="lines+markers",
+            marker={"size": 5},
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=month_labels,
+            y=avg_tmin,
+            name="Avg Tmin",
+            line={"color": _BLUE, "width": 1.5, "shape": "spline"},
+            mode="lines+markers",
+            marker={"size": 5},
+        )
+    )
     _apply_standard_layout(fig, f"Monthly average temperatures — {station_name}", "°C")
     fig.update_yaxes(dtick=2, **_YAXIS_GRID)
     return fig
@@ -325,15 +413,19 @@ def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
 def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
     """Line chart: average temp_min (dashed) and temp_max (solid) by month, one colour per decade."""
     decade_monthly = (
-        df.with_columns([
-            pl.col("DATE").dt.month().alias("month"),
-            ((pl.col("DATE").dt.year() // 10) * 10).alias("decade"),
-        ])
+        df.with_columns(
+            [
+                pl.col("DATE").dt.month().alias("month"),
+                ((pl.col("DATE").dt.year() // 10) * 10).alias("decade"),
+            ]
+        )
         .group_by(["decade", "month"])
-        .agg([
-            pl.col("temp_min").mean().alias("avg_temp_min"),
-            pl.col("temp_max").mean().alias("avg_temp_max"),
-        ])
+        .agg(
+            [
+                pl.col("temp_min").mean().alias("avg_temp_min"),
+                pl.col("temp_max").mean().alias("avg_temp_max"),
+            ]
+        )
         .sort(["decade", "month"])
     )
 
@@ -347,7 +439,8 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
         tmin_color = _gradient_color(t, _TMIN_GRADIENT_START, _TMIN_GRADIENT_END)
         sub = _MONTH_SPINE.join(
             decade_monthly.filter(pl.col("decade") == decade).select(["month", "avg_temp_min", "avg_temp_max"]),
-            on="month", how="left",
+            on="month",
+            how="left",
         )
         month_labels = [_MONTH_LABELS[m - 1] for m in sub["month"].to_list()]
         label = f"{decade}s"
