@@ -285,10 +285,16 @@ def test_monthly_avg_temp_figure_returns_figure(sample_df: pl.DataFrame) -> None
     assert isinstance(fig, go.Figure)
 
 
-def test_monthly_avg_temp_figure_has_two_line_traces(sample_df: pl.DataFrame) -> None:
+def test_monthly_avg_temp_figure_has_two_named_line_traces(sample_df: pl.DataFrame) -> None:
+    """Two main traces (Avg Tmax, Avg Tmin) + four invisible sigma-band boundary traces = 6 total."""
     fig = monthly_avg_temp_figure(sample_df, "TOULOUSE")
-    assert len(fig.data) == 2
     assert all(isinstance(t, go.Scatter) for t in fig.data)
+    named = [t for t in fig.data if t.name]
+    assert len(named) == 2
+    assert any("tmax" in t.name.lower() for t in named)
+    assert any("tmin" in t.name.lower() for t in named)
+    sigma_band = [t for t in fig.data if not t.name]
+    assert len(sigma_band) == 4
 
 
 def test_monthly_avg_temp_figure_title_contains_station(sample_df: pl.DataFrame) -> None:

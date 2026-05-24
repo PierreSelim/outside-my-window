@@ -18,6 +18,8 @@ _GREEN = "#5CB85C"
 _GREY = "#AAAAAA"
 _BAND_FILL = "rgba(76, 155, 232, 0.15)"
 _HOT_DAY_FILL = "rgba(230, 80, 0, 0.15)"
+_TMAX_SIGMA_FILL = "rgba(232, 92, 76, 0.15)"
+_TMIN_SIGMA_FILL = "rgba(76, 155, 232, 0.15)"
 
 # ---------------------------------------------------------------------------
 # Grid / axis style
@@ -117,6 +119,31 @@ def _add_temp_trace(
     fig.add_trace(go.Scatter(
         x=month_labels, y=y, name=name,
         line=line, mode="lines+markers", marker={"size": 4},
+    ))
+
+
+def _add_sigma_band(
+    fig: go.Figure,
+    x: list,
+    avg: list,
+    std: list,
+    fillcolor: str,
+    n_sigma: float = 2.0,
+) -> None:
+    """Add a ±n_sigma shaded band using two invisible boundary traces."""
+    upper = [a + n_sigma * s if a is not None and s is not None else None for a, s in zip(avg, std)]
+    lower = [a - n_sigma * s if a is not None and s is not None else None for a, s in zip(avg, std)]
+    invisible_line: dict = {"color": "rgba(0,0,0,0)", "width": 0, "shape": "spline"}
+    fig.add_trace(go.Scatter(
+        x=x, y=upper, name="",
+        mode="lines", line=invisible_line,
+        showlegend=False, hoverinfo="skip",
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=lower, name="",
+        mode="lines", line=invisible_line,
+        fill="tonexty", fillcolor=fillcolor,
+        showlegend=False, hoverinfo="skip",
     ))
 
 
@@ -259,26 +286,34 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
 
 
 def monthly_avg_temp_figure(df: pl.DataFrame, station_name: str) -> go.Figure:
-    """Line chart: average temp_min and temp_max by month of year."""
+    """Line chart: average temp_min and temp_max by month of year, with ±2σ bands."""
     monthly = _MONTH_SPINE.join(
         df.with_columns(pl.col("DATE").dt.month().alias("month"))
         .group_by("month")
         .agg([
             pl.col("temp_min").mean().alias("avg_temp_min"),
             pl.col("temp_max").mean().alias("avg_temp_max"),
+            pl.col("temp_min").std().alias("std_temp_min"),
+            pl.col("temp_max").std().alias("std_temp_max"),
         ]),
         on="month", how="left",
     )
     month_labels = [_MONTH_LABELS[m - 1] for m in monthly["month"].to_list()]
+    avg_tmax = monthly["avg_temp_max"].to_list()
+    avg_tmin = monthly["avg_temp_min"].to_list()
+    std_tmax = monthly["std_temp_max"].to_list()
+    std_tmin = monthly["std_temp_min"].to_list()
 
     fig = go.Figure()
+    _add_sigma_band(fig, month_labels, avg_tmax, std_tmax, _TMAX_SIGMA_FILL)
+    _add_sigma_band(fig, month_labels, avg_tmin, std_tmin, _TMIN_SIGMA_FILL)
     fig.add_trace(go.Scatter(
-        x=month_labels, y=monthly["avg_temp_max"].to_list(), name="Avg Tmax",
+        x=month_labels, y=avg_tmax, name="Avg Tmax",
         line={"color": _RED, "width": 1.5, "shape": "spline"},
         mode="lines+markers", marker={"size": 5},
     ))
     fig.add_trace(go.Scatter(
-        x=month_labels, y=monthly["avg_temp_min"].to_list(), name="Avg Tmin",
+        x=month_labels, y=avg_tmin, name="Avg Tmin",
         line={"color": _BLUE, "width": 1.5, "shape": "spline"},
         mode="lines+markers", marker={"size": 5},
     ))
