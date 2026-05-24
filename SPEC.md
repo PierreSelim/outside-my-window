@@ -118,7 +118,7 @@ gain a suffix: ` (weekly avg)` or ` (monthly avg)`.
   and in a summary card below the chart
 
 #### Monthly averages tab
-- Average Tmin / Tmax by month of year
+- Average Tmin / Tmax by month of year, with **±2σ shaded bands** showing inter-annual variability
 - Average Tmin / Tmax by month of year, broken down by decade
 
 ## Architecture Decisions
@@ -135,4 +135,10 @@ gain a suffix: ` (weekly avg)` or ` (monthly avg)`.
 - **Trend statistics**: `_linear_trend` in `charts.py` returns `(slope, intercept, r_squared)`.
   Slope and R² are surfaced in two places: hover tooltip on the trend trace, and a summary
   card rendered below the yearly extremes chart via a second Dash `Output`.
+- **±2σ bands**: `_add_sigma_band(fig, x, avg, std, fillcolor, n_sigma=2.0)` in `charts.py`
+  draws a shaded inter-annual variability envelope using two invisible boundary `go.Scatter`
+  traces with `fill="tonexty"`. Called by `monthly_avg_temp_figure` for both Tmax (orange
+  fill `_TMAX_SIGMA_FILL`) and Tmin (blue fill `_TMIN_SIGMA_FILL`). The standard deviation
+  is computed per calendar month via `pl.col(…).std()` in the `group_by("month").agg(…)`
+  step.
 

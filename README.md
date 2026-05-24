@@ -1,5 +1,8 @@
 # Outside My Window
 
+[![CI](https://github.com/PierreSelim/outside-my-window/actions/workflows/ci.yml/badge.svg)](https://github.com/PierreSelim/outside-my-window/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/PierreSelim/outside-my-window/branch/main/graph/badge.svg)](https://codecov.io/gh/PierreSelim/outside-my-window)
+
 Visualization app for French daily climatological data from Météo-France ([data.gouv.fr](https://www.data.gouv.fr/datasets/donnees-climatologiques-de-base-quotidiennes)).
 
 Select a department, a weather station, and a year range to explore temperature, precipitation, and wind history.

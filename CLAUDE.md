@@ -1,7 +1,10 @@
 # CLAUDE.md
 
-## Project spec
-Keep `SPEC.md` up to date as decisions are made. Any time a new architectural choice, data finding, dependency, or structural change is agreed upon, update the relevant section of `SPEC.md` before moving on.
+## Documentation
+Keep documentation up to date as part of every change:
+
+- **`SPEC.md`**: update whenever a new feature is added or an existing one changes — describe behaviour, data flow, and any architectural decisions made. Do this before moving on.
+- **`README.md`**: update whenever the build process changes (new dependencies, new `uv` commands, environment setup steps) or a new CLI script is added under `scripts/`.
 
 ## Testing
 Every new module or function added to `src/` must be covered by unit tests in `tests/`:
