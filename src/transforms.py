@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import assert_never
 
 import polars as pl
 
@@ -12,6 +13,59 @@ class LinearTrend:
     slope: float
     intercept: float
     r_squared: float
+
+
+@dataclass(frozen=True)
+class TmaxOnly:
+    tmax_min: float
+
+    @property
+    def label(self) -> str:
+        return f"Tmax≥{self.tmax_min:.0f}°C"
+
+
+@dataclass(frozen=True)
+class TmaxAndTmin:
+    tmax_min: float
+    tmin_min: float
+
+    @property
+    def label(self) -> str:
+        return f"Tmin≥{self.tmin_min:.0f}°C & Tmax≥{self.tmax_min:.0f}°C"
+
+
+type HotDayDefinition = TmaxOnly | TmaxAndTmin
+
+DEFAULT_HOT_DAY: HotDayDefinition = TmaxAndTmin(tmax_min=HOT_DAY_TMAX, tmin_min=HOT_DAY_TMIN)
+HOT_DAY_OPTIONS: list[HotDayDefinition] = [
+    DEFAULT_HOT_DAY,
+    TmaxOnly(32.0),
+    TmaxOnly(35.0),
+    TmaxOnly(36.0),
+    TmaxOnly(37.0),
+    TmaxOnly(38.0),
+    TmaxOnly(39.0),
+    TmaxOnly(40.0),
+]
+
+
+def hot_day_from(label: str) -> HotDayDefinition:
+    return next((d for d in HOT_DAY_OPTIONS if d.label == label), DEFAULT_HOT_DAY)
+
+
+def _hot_predicate(d: HotDayDefinition) -> pl.Expr:
+    match d:
+        case TmaxOnly():
+            return pl.col("temp_max").is_not_null() & (pl.col("temp_max") >= d.tmax_min)
+        case TmaxAndTmin():
+            return (
+                pl.col("temp_max").is_not_null()
+                & (pl.col("temp_max") >= d.tmax_min)
+                & pl.col("temp_min").is_not_null()
+                & (pl.col("temp_min") >= d.tmin_min)
+            )
+        case _:
+            assert_never(d)
 
 
 def linear_trend(x: list[float | int], y: list[float | int | None]) -> LinearTrend:
@@ -44,7 +98,7 @@ def linear_trend(x: list[float | int], y: list[float | int | None]) -> LinearTre
     return LinearTrend(slope, intercept, r_squared)
 
 
-def yearly_hot_cold(df: pl.DataFrame) -> pl.DataFrame:
+def yearly_hot_cold(df: pl.DataFrame, definition: HotDayDefinition = DEFAULT_HOT_DAY) -> pl.DataFrame:
     """Aggregate daily station data into yearly hot-day and cold-day counts.
 
     Returns a DataFrame with columns: year, hot_days, cold_days, sorted ascending by year.
@@ -54,14 +108,7 @@ def yearly_hot_cold(df: pl.DataFrame) -> pl.DataFrame:
         .group_by("year")
         .agg(
             [
-                (
-                    pl.col("temp_min").is_not_null()
-                    & pl.col("temp_max").is_not_null()
-                    & (pl.col("temp_min") >= HOT_DAY_TMIN)
-                    & (pl.col("temp_max") >= HOT_DAY_TMAX)
-                )
-                .sum()
-                .alias("hot_days"),
+                _hot_predicate(definition).sum().alias("hot_days"),
                 (pl.col("temp_min").is_not_null() & (pl.col("temp_min") < 0)).sum().alias("cold_days"),
             ]
         )

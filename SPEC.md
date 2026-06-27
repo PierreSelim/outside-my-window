@@ -111,11 +111,29 @@ numeric measurement columns (`temp_min`, `temp_max`, `temp_amplitude`,
 gain a suffix: ` (weekly avg)` or ` (monthly avg)`.
 
 #### Yearly extremes tab
-- Bar chart: yearly count of hot days (Tmin ≥ 20 °C and Tmax ≥ 35 °C) and cold days (Tmin < 0 °C)
-- Current (incomplete) year excluded from the chart so partial counts don't skew trends
+- Line chart: yearly count of hot days and cold days (Tmin < 0 °C)
+- **Configurable hot-day definition** — a dropdown lets the user choose from eight options:
+  - Default: Tmin ≥ 20 °C **and** Tmax ≥ 35 °C (historical, matches the Observations shading)
+  - Tmax-only thresholds: 32, 35, 36, 37, 38, 39, 40 °C
+  - Represented by the sum type `HotDayDefinition = TmaxOnly | TmaxAndTmin` in `transforms.py`
+  - `HOT_DAY_OPTIONS` lists all eight options; `hot_day_from(label)` resolves a label string back to
+    the matching option (returns `DEFAULT_HOT_DAY` for unrecognised labels, never raises)
+- **Provisional current-year rendering** — when the year-range upper bound includes the current year:
+  - Complete years (year < current year) are drawn as solid traces
+  - The current (partial) year is rendered as a dotted connector from the last complete year to a
+    hollow circle marker (`circle-open`), indicating provisional/partial data
+  - If no data exists for the current year in the filtered range, no dotted trace is added
+  - Edge case: if there are zero complete years and only a provisional row, a single hollow marker
+    is rendered (no connector line)
+  - When the year-range upper bound is below the current year, the provisional path is skipped
+    entirely and all years are treated as complete
 - Optional tendency lines (OLS linear regression) toggled via a checklist
-- When trends are shown: slope and R² appear both as a hover tooltip on each trend trace
-  and in a summary card below the chart
+  - Regression is computed over **complete years only** (current year excluded), even when the
+    provisional point is shown on the chart
+  - When trends are shown: slope and R² appear both as a hover tooltip on each trend trace
+    and in a summary card below the chart
+- The Observations tab temperature-chart hot-day shading is intentionally left on the original
+  default rule (Tmin ≥ 20 °C and Tmax ≥ 35 °C) regardless of the dropdown selection
 
 #### Monthly averages tab
 - Average Tmin / Tmax by month of year, with **±2σ shaded bands** showing inter-annual variability
@@ -132,9 +150,14 @@ gain a suffix: ` (weekly avg)` or ` (monthly avg)`.
 - **Temporal aggregation**: `aggregate(df, granularity)` in `data_loader.py`; called in
   `station_page.update_charts` after the station/year filter. `Granularity.DAY` is the
   identity (returns df unchanged). Week uses `dt.truncate("1w")`, month uses `"1mo"`.
-- **Trend statistics**: `_linear_trend` in `charts.py` returns `(slope, intercept, r_squared)`.
-  Slope and R² are surfaced in two places: hover tooltip on the trend trace, and a summary
-  card rendered below the yearly extremes chart via a second Dash `Output`.
+- **Trend statistics**: `linear_trend` in `transforms.py` returns a `LinearTrend` dataclass
+  `(slope, intercept, r_squared)`. Slope and R² are surfaced in two places: hover tooltip on
+  the trend trace, and a summary card rendered below the yearly extremes chart via a second
+  Dash `Output`. When a provisional current year is shown, trend regression uses complete years only.
+- **HotDayDefinition sum type**: `TmaxOnly | TmaxAndTmin` in `transforms.py`. `_hot_predicate`
+  maps a definition to a Polars expression; `yearly_hot_cold` accepts a `definition` parameter
+  (default `DEFAULT_HOT_DAY = TmaxAndTmin(35.0, 20.0)`). The `hot_cold_yearly_figure` function
+  in `charts.py` also accepts `definition` and embeds `definition.label` in the hot-trace name.
 - **±2σ bands**: `_add_sigma_band(fig, x, avg, std, fillcolor, n_sigma=2.0)` in `charts.py`
   draws a shaded inter-annual variability envelope using two invisible boundary `go.Scatter`
   traces with `fill="tonexty"`. Called by `monthly_avg_temp_figure` for both Tmax (orange

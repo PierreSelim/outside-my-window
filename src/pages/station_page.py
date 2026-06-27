@@ -27,7 +27,7 @@ from src.data_loader import (
     stations_from,
 )
 from src.departments import DEPT_NAMES
-from src.transforms import LinearTrend, linear_trend, yearly_hot_cold
+from src.transforms import DEFAULT_HOT_DAY, HOT_DAY_OPTIONS, LinearTrend, hot_day_from, linear_trend, yearly_hot_cold
 
 _DEFAULT_YEAR_WINDOW: int = 20
 _NO_DATA = "No data available"
@@ -179,11 +179,36 @@ def layout(search: str = "") -> html.Div:
                             html.Div(
                                 className="card",
                                 children=[
-                                    dcc.Checklist(
-                                        id="yearly-trend-toggle",
-                                        options=[{"label": "  Show tendency lines", "value": "show"}],
-                                        value=[],
-                                        inline=True,
+                                    html.Div(
+                                        className="controls-row",
+                                        children=[
+                                            html.Div(
+                                                className="control-group",
+                                                children=[
+                                                    html.Label("Hot day definition", className="control-label"),
+                                                    dcc.Dropdown(
+                                                        id="hot-day-definition",
+                                                        options=[
+                                                            {"label": d.label, "value": d.label}
+                                                            for d in HOT_DAY_OPTIONS
+                                                        ],
+                                                        value=DEFAULT_HOT_DAY.label,
+                                                        clearable=False,
+                                                    ),
+                                                ],
+                                            ),
+                                            html.Div(
+                                                className="control-group",
+                                                children=[
+                                                    dcc.Checklist(
+                                                        id="yearly-trend-toggle",
+                                                        options=[{"label": "  Show tendency lines", "value": "show"}],
+                                                        value=[],
+                                                        inline=True,
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
                                     ),
                                 ],
                             ),
@@ -256,28 +281,42 @@ def update_yearly_chart(
     year_range: list[int],
     dept: str | None,
     trend_values: list[str] | None,
+    definition_label: str = DEFAULT_HOT_DAY.label,
 ) -> tuple[go.Figure, list[Any]]:
     """Render the yearly hot/cold days chart, with optional trend lines.
 
-    The current (incomplete) year is excluded so partial counts don't skew the chart.
+    The current (incomplete) year is shown as a provisional dotted point when the year-range
+    upper bound includes it. Trend statistics are computed on complete years only.
     Returns (figure, trend_stats_children) — the stats card is empty when trends are off.
     """
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
         return empty_figure(_NO_DATA), []
-    current_year = datetime.date.today().year
-    df = df.filter(pl.col("DATE").dt.year() < current_year)
-    if df.is_empty():
-        return empty_figure(_NO_DATA), []
 
+    current_year = datetime.date.today().year
+    definition = hot_day_from(definition_label)
     show_trend = "show" in (trend_values or [])
-    fig = hot_cold_yearly_figure(df, df["station_name"][0], show_trend=show_trend)
+    provisional = current_year if year_range[1] >= current_year else None
+
+    fig = hot_cold_yearly_figure(
+        df,
+        df["station_name"][0],
+        definition=definition,
+        show_trend=show_trend,
+        current_year=provisional,
+    )
 
     if not show_trend:
         return fig, []
 
-    agg = yearly_hot_cold(df)
+    df_complete = df.filter(pl.col("DATE").dt.year() < current_year)
+    if df_complete.is_empty():
+        return fig, []
+
+    agg = yearly_hot_cold(df_complete, definition)
     years_f = [float(y) for y in agg["year"].to_list()]
+    if len(years_f) < 2:
+        return fig, []
 
     rows = []
     for label, col in [("Hot days", "hot_days"), ("Cold days", "cold_days")]:
@@ -338,6 +377,7 @@ def register_callbacks(app: Dash) -> None:
         Input("year-slider", "value"),
         State("dept-store", "data"),
         Input("yearly-trend-toggle", "value"),
+        Input("hot-day-definition", "value"),
     )(update_yearly_chart)
 
     app.callback(

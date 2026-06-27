@@ -7,7 +7,7 @@ import plotly.graph_objects as go
 import polars as pl
 
 from src.data_loader import HOT_DAY_TMAX, HOT_DAY_TMIN, Granularity
-from src.transforms import LinearTrend, linear_trend, yearly_hot_cold
+from src.transforms import DEFAULT_HOT_DAY, HotDayDefinition, LinearTrend, linear_trend, yearly_hot_cold
 
 # ---------------------------------------------------------------------------
 # Colour palette
@@ -302,20 +302,43 @@ def wind_figure(
     return fig
 
 
-def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool = False) -> go.Figure:
-    """Line chart: yearly count of hot days and days with temp_min < 0."""
-    agg = yearly_hot_cold(df)
+def hot_cold_yearly_figure(
+    df: pl.DataFrame,
+    station_name: str,
+    *,
+    definition: HotDayDefinition = DEFAULT_HOT_DAY,
+    show_trend: bool = False,
+    current_year: int | None = None,
+) -> go.Figure:
+    """Line chart: yearly count of hot days and days with temp_min < 0.
+
+    When current_year is provided and a row for that year exists in the data, it is rendered
+    as a provisional point connected by a dotted line to the last complete year.
+    """
+    agg = yearly_hot_cold(df, definition)
     years = agg["year"].to_list()
-    hot_days = agg["hot_days"].to_list()
-    cold_days = agg["cold_days"].to_list()
-    years_f = [float(y) for y in years]
+    hot = agg["hot_days"].to_list()
+    cold = agg["cold_days"].to_list()
+
+    if current_year is None:
+        complete_years = years
+        complete_hot = hot
+        complete_cold = cold
+        provisional = None
+    else:
+        c_idx = [i for i, y in enumerate(years) if y < current_year]
+        p_idx = next((i for i, y in enumerate(years) if y == current_year), None)
+        complete_years = [years[i] for i in c_idx]
+        complete_hot = [hot[i] for i in c_idx]
+        complete_cold = [cold[i] for i in c_idx]
+        provisional = (years[p_idx], hot[p_idx], cold[p_idx]) if p_idx is not None else None
 
     fig = go.Figure()
     fig.add_trace(
         go.Scatter(
-            x=years,
-            y=hot_days,
-            name=f"Hot days (Tmin≥{HOT_DAY_TMIN:.0f}°C & Tmax≥{HOT_DAY_TMAX:.0f}°C)",
+            x=complete_years,
+            y=complete_hot,
+            name=f"Hot days ({definition.label})",
             line={"color": _RED, "width": 1.5, "shape": "spline"},
             mode="lines+markers",
             marker={"size": 4},
@@ -323,8 +346,8 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
     )
     fig.add_trace(
         go.Scatter(
-            x=years,
-            y=cold_days,
+            x=complete_years,
+            y=complete_cold,
             name="Cold days (Tmin < 0°C)",
             line={"color": _BLUE, "width": 1.5, "shape": "spline"},
             mode="lines+markers",
@@ -332,20 +355,51 @@ def hot_cold_yearly_figure(df: pl.DataFrame, station_name: str, show_trend: bool
         )
     )
 
-    if show_trend and len(years_f) >= 2:
-        for label, counts, color in [
-            ("Hot days trend", hot_days, _RED),
-            ("Cold days trend", cold_days, _BLUE),
+    if provisional is not None:
+        prov_year, prov_hot, prov_cold = provisional
+        for series_complete, prov_val, color in [
+            (complete_hot, prov_hot, _RED),
+            (complete_cold, prov_cold, _BLUE),
         ]:
-            trend: LinearTrend = linear_trend(years_f, counts)
-            trend_y = [trend.slope * y + trend.intercept for y in years_f]
+            if complete_years:
+                x_dot = [complete_years[-1], prov_year]
+                y_dot = [series_complete[-1], prov_val]
+                dot_mode = "lines+markers"
+                # Suppress hover on the anchor (already shown by the solid trace);
+                # only the provisional endpoint carries the "(partial)" label.
+                hover: str | list[str] = ["<extra></extra>", "(partial)<extra></extra>"]
+            else:
+                x_dot = [prov_year]
+                y_dot = [prov_val]
+                dot_mode = "markers"
+                hover = "(partial)<extra></extra>"
+            fig.add_trace(
+                go.Scatter(
+                    x=x_dot,
+                    y=y_dot,
+                    mode=dot_mode,
+                    line={"dash": "dot", "color": color, "width": 1.5},
+                    marker={"symbol": "circle-open", "size": 6},
+                    showlegend=False,
+                    hovertemplate=hover,
+                )
+            )
+
+    complete_years_f = [float(y) for y in complete_years]
+    if show_trend and len(complete_years_f) >= 2:
+        for label, counts, color in [
+            ("Hot days trend", complete_hot, _RED),
+            ("Cold days trend", complete_cold, _BLUE),
+        ]:
+            trend: LinearTrend = linear_trend(complete_years_f, counts)
+            trend_y = [trend.slope * y + trend.intercept for y in complete_years_f]
             sign = "+" if trend.slope >= 0 else "−"
             hover = (
                 f"{label}<br>slope: {sign}{abs(trend.slope):.2f} days/yr<br>R²: {trend.r_squared:.2f}<extra></extra>"  # noqa: E501
             )
             fig.add_trace(
                 go.Scatter(
-                    x=years,
+                    x=complete_years,
                     y=trend_y,
                     name=label,
                     line={"color": color, "width": 1, "dash": "dash"},

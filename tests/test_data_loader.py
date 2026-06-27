@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gzip
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,7 +10,11 @@ import pytest
 
 from src.data_loader import (
     Granularity,
+    Period,
     Station,
+    _download,
+    _fetch,
+    _is_stale,
     _parse,
     aggregate,
     granularity_from,
@@ -286,21 +291,127 @@ def test_granularity_from_returns_day_for_unknown() -> None:
 def test_load_department_cached_calls_load_department(sample_df: pl.DataFrame) -> None:
     import src.data_loader as dl
 
-    # Use a fresh dept key that is not already in the shared cache
-    dl._dept_cache.pop("__test_dept__", None)
+    dept = "__test_dept__"
+    dl._dept_cache.pop(dept, None)
+    dl._dept_cache_time.pop(dept, None)
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
-        result = load_department_cached("__test_dept__")
+        result = load_department_cached(dept)
     assert result is sample_df
-    mock_load.assert_called_once_with("__test_dept__")
-    dl._dept_cache.pop("__test_dept__", None)  # clean up
+    mock_load.assert_called_once_with(dept)
+    dl._dept_cache.pop(dept, None)
+    dl._dept_cache_time.pop(dept, None)
 
 
 def test_load_department_cached_reuses_cache(sample_df: pl.DataFrame) -> None:
     import src.data_loader as dl
 
-    dl._dept_cache.pop("__test_dept2__", None)
+    dept = "__test_dept2__"
+    dl._dept_cache.pop(dept, None)
+    dl._dept_cache_time.pop(dept, None)
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
-        load_department_cached("__test_dept2__")
-        load_department_cached("__test_dept2__")
-    mock_load.assert_called_once()  # second call must not trigger load_department
-    dl._dept_cache.pop("__test_dept2__", None)  # clean up
+        load_department_cached(dept)
+        load_department_cached(dept)
+    mock_load.assert_called_once()
+    dl._dept_cache.pop(dept, None)
+    dl._dept_cache_time.pop(dept, None)
+
+
+def test_load_department_cached_refreshes_after_ttl(sample_df: pl.DataFrame) -> None:
+    import src.data_loader as dl
+
+    dept = "__test_ttl__"
+    dl._dept_cache.pop(dept, None)
+    dl._dept_cache_time.pop(dept, None)
+    with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
+        load_department_cached(dept)
+        dl._dept_cache_time[dept] = time.time() - dl._LATEST_TTL_SECONDS - 1
+        load_department_cached(dept)
+    assert mock_load.call_count == 2
+    dl._dept_cache.pop(dept, None)
+    dl._dept_cache_time.pop(dept, None)
+
+
+# ---------------------------------------------------------------------------
+# _fetch / _download / _is_stale
+# ---------------------------------------------------------------------------
+
+
+def test_is_stale_returns_true_for_old_file(tmp_path: Path) -> None:
+    f = tmp_path / "old.csv.gz"
+    f.write_bytes(b"data")
+    past = time.time() - 7 * 3600
+    import os
+
+    os.utime(f, (past, past))
+    assert _is_stale(f) is True
+
+
+def test_is_stale_returns_false_for_fresh_file(tmp_path: Path) -> None:
+    f = tmp_path / "fresh.csv.gz"
+    f.write_bytes(b"data")
+    assert _is_stale(f) is False
+
+
+def test_fetch_returns_cached_path_when_latest_is_fresh(tmp_path: Path) -> None:
+    cached = tmp_path / "cached.csv.gz"
+    cached.write_bytes(b"data")
+    with (
+        patch("src.data_loader._cache_path", return_value=cached),
+        patch("src.data_loader._is_stale", return_value=False),
+        patch("src.data_loader._download") as mock_dl,
+    ):
+        result = _fetch("31", Period.LATEST)
+    mock_dl.assert_not_called()
+    assert result == cached
+
+
+def test_fetch_redownloads_stale_latest(tmp_path: Path) -> None:
+    stale = tmp_path / "stale.csv.gz"
+    stale.write_bytes(b"old")
+    fresh = tmp_path / "fresh.csv.gz"
+    fresh.write_bytes(b"new")
+    with (
+        patch("src.data_loader._cache_path", return_value=stale),
+        patch("src.data_loader._is_stale", return_value=True),
+        patch("src.data_loader._download", return_value=fresh) as mock_dl,
+    ):
+        result = _fetch("31", Period.LATEST)
+    mock_dl.assert_called_once()
+    assert result == fresh
+
+
+def test_fetch_falls_back_to_stale_on_download_failure(tmp_path: Path) -> None:
+    stale = tmp_path / "stale.csv.gz"
+    stale.write_bytes(b"old")
+    with (
+        patch("src.data_loader._cache_path", return_value=stale),
+        patch("src.data_loader._is_stale", return_value=True),
+        patch("src.data_loader._download", return_value=None),
+    ):
+        result = _fetch("31", Period.LATEST)
+    assert result == stale
+
+
+def test_fetch_does_not_check_staleness_for_historical(tmp_path: Path) -> None:
+    cached = tmp_path / "hist.csv.gz"
+    cached.write_bytes(b"data")
+    with patch("src.data_loader._cache_path", return_value=cached), patch("src.data_loader._is_stale") as mock_stale:
+        result = _fetch("31", Period.HISTORICAL)
+    mock_stale.assert_not_called()
+    assert result == cached
+
+
+def test_fetch_does_not_check_staleness_for_modern(tmp_path: Path) -> None:
+    cached = tmp_path / "modern.csv.gz"
+    cached.write_bytes(b"data")
+    with patch("src.data_loader._cache_path", return_value=cached), patch("src.data_loader._is_stale") as mock_stale:
+        result = _fetch("31", Period.MODERN)
+    mock_stale.assert_not_called()
+    assert result == cached
+
+
+def test_download_returns_none_on_http_error() -> None:
+    with patch("src.data_loader.requests.get") as mock_get:
+        mock_get.return_value.status_code = 404
+        result = _download("99", Period.LATEST)
+    assert result is None

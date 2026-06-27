@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
@@ -130,6 +131,9 @@ _META_COLS: list[str] = ["lat", "lon", "altitude"]
 # ---------------------------------------------------------------------------
 
 
+_LATEST_TTL_SECONDS: int = 6 * 3600
+
+
 def _file_url(dept: str, period: Period) -> str:
     return f"{BASE_URL}/Q_{dept}_{period.value}_RR-T-Vent.csv.gz"
 
@@ -138,24 +142,35 @@ def _cache_path(dept: str, period: Period) -> Path:
     return CACHE_DIR / f"Q_{dept}_{period.value}_RR-T-Vent.csv.gz"
 
 
+def _is_stale(path: Path) -> bool:
+    return time.time() - path.stat().st_mtime > _LATEST_TTL_SECONDS
+
+
+def _download(dept: str, period: Period) -> Path | None:
+    url = _file_url(dept, period)
+    response = requests.get(url, timeout=30)
+    if response.status_code != 200:
+        return None
+    path = _cache_path(dept, period)
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(response.content)
+    return path
+
+
 def _fetch(dept: str, period: Period) -> Path | None:
     """Return the local cache path for (dept, period), downloading if needed.
 
+    For Period.LATEST, re-downloads if the cached file is older than _LATEST_TTL_SECONDS.
+    On network failure during refresh, falls back to the stale file rather than returning None.
     Returns None when the remote file does not exist (e.g. no historical data
     for that department) — never raises for expected HTTP failures.
     """
     path = _cache_path(dept, period)
     if path.exists():
-        return path
-
-    url = _file_url(dept, period)
-    response = requests.get(url, timeout=30)
-    if response.status_code != 200:
-        return None
-
-    CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(response.content)
-    return path
+        if period != Period.LATEST or not _is_stale(path):
+            return path
+        return _download(dept, period) or path
+    return _download(dept, period)
 
 
 def _parse(path: Path) -> pl.DataFrame | None:
@@ -226,6 +241,7 @@ def load_department(dept: str) -> pl.DataFrame | None:
 
 
 _dept_cache: dict[str, pl.DataFrame | None] = {}
+_dept_cache_time: dict[str, float] = {}
 _dept_locks: dict[str, threading.Lock] = {}
 _dept_locks_lock = threading.Lock()
 
@@ -233,18 +249,21 @@ _dept_locks_lock = threading.Lock()
 def load_department_cached(dept: str) -> pl.DataFrame | None:
     """Return a department DataFrame from an in-process cache, loading on first access.
 
+    Expires after _LATEST_TTL_SECONDS so that Period.LATEST data stays fresh.
     Thread-safe: concurrent requests for different departments do not block each other;
     concurrent requests for the same department wait on a per-key lock.
     """
-    if dept in _dept_cache:
+    now = time.time()
+    if dept in _dept_cache and now - _dept_cache_time.get(dept, 0.0) < _LATEST_TTL_SECONDS:
         return _dept_cache[dept]
     with _dept_locks_lock:
         if dept not in _dept_locks:
             _dept_locks[dept] = threading.Lock()
         lock = _dept_locks[dept]
     with lock:
-        if dept not in _dept_cache:
+        if dept not in _dept_cache or now - _dept_cache_time.get(dept, 0.0) >= _LATEST_TTL_SECONDS:
             _dept_cache[dept] = load_department(dept)
+            _dept_cache_time[dept] = now
     return _dept_cache[dept]
 
 

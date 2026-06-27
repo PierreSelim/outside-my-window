@@ -218,6 +218,18 @@ def test_update_yearly_chart_trend_toggle_adds_traces(sample_df) -> None:
     assert isinstance(stats, list)
 
 
+def test_update_yearly_chart_one_complete_year_trend_stats_empty(sample_df) -> None:
+    """Exactly 1 complete year: trend toggle ON must yield an empty stats card.
+
+    The chart's regression guard requires >= 2 complete years; the stats card must
+    mirror that guard so it never shows +0.00 days/yr rows for a degenerate fit.
+    """
+    with patch("src.pages.station_page.load_department_cached", return_value=sample_df):
+        fig, stats = update_yearly_chart(31001, [2020, 2020], "31", ["show"])
+    assert isinstance(fig, go.Figure)
+    assert stats == []
+
+
 # ---------------------------------------------------------------------------
 # update_monthly_charts
 # ---------------------------------------------------------------------------

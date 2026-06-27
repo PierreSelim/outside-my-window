@@ -15,7 +15,7 @@ from src.charts import (
     temperature_figure,
     wind_figure,
 )
-from src.transforms import linear_trend
+from src.transforms import TmaxOnly, linear_trend
 
 # ---------------------------------------------------------------------------
 # temperature_figure
@@ -442,3 +442,101 @@ def test_temperature_band_traces_share_same_dates_when_nulls_differ(sample_df: p
     max_trace = next(t for t in fig.data if t.name == "Max")
     min_trace = next(t for t in fig.data if t.name == "Min")
     assert list(max_trace.x) == list(min_trace.x)
+
+
+# ---------------------------------------------------------------------------
+# hot_cold_yearly_figure — current_year provisional point
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def two_year_df() -> pl.DataFrame:
+    """DataFrame with a complete year (2019) and a provisional current year (2020).
+
+    2019-07-01: hot day under default definition (tmin=21≥20, tmax=36≥35).
+    2019-08-01: cold day (tmin=-1<0).
+    2020-07-01: hot day under default definition (provisional, i.e. current year).
+    """
+    return pl.DataFrame(
+        {
+            "DATE": [date(2019, 7, 1), date(2019, 8, 1), date(2020, 7, 1)],
+            "temp_min": [21.0, -1.0, 21.0],
+            "temp_max": [36.0, 5.0, 36.0],
+        },
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+
+
+def test_hot_cold_yearly_figure_current_year_none_gives_two_traces(sample_df: pl.DataFrame) -> None:
+    """Explicit current_year=None: provisional path off, only 2 solid traces returned."""
+    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE", current_year=None)
+    assert len(fig.data) == 2
+
+
+def test_hot_cold_yearly_figure_current_year_adds_dotted_traces(two_year_df: pl.DataFrame) -> None:
+    """With current_year set and data for that year, exactly two dotted connector traces are added."""
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
+    assert len(dot_traces) == 2
+
+
+def test_hot_cold_yearly_figure_total_traces_with_current_year(two_year_df: pl.DataFrame) -> None:
+    """2 solid + 2 dotted = 4 traces total when current_year is set and present in the data."""
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    assert len(fig.data) == 4
+
+
+def test_hot_cold_yearly_figure_dotted_traces_have_open_circle_marker(two_year_df: pl.DataFrame) -> None:
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
+    for trace in dot_traces:
+        assert trace.marker.symbol == "circle-open"
+
+
+def test_hot_cold_yearly_figure_dotted_traces_not_in_legend(two_year_df: pl.DataFrame) -> None:
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
+    for trace in dot_traces:
+        assert trace.showlegend is False
+
+
+def test_hot_cold_yearly_figure_solid_hot_trace_excludes_current_year(two_year_df: pl.DataFrame) -> None:
+    """The solid hot trace y must cover only complete years — current year must not appear in x."""
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    solid_hot = next(t for t in fig.data if "hot" in t.name.lower() and getattr(t.line, "dash", None) != "dot")
+    assert 2020 not in list(solid_hot.x)
+
+
+def test_hot_cold_yearly_figure_solid_cold_trace_excludes_current_year(two_year_df: pl.DataFrame) -> None:
+    """The solid cold trace y must cover only complete years — current year must not appear in x."""
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    solid_cold = next(t for t in fig.data if "cold" in t.name.lower() and getattr(t.line, "dash", None) != "dot")
+    assert 2020 not in list(solid_cold.x)
+
+
+def test_hot_cold_yearly_figure_no_dotted_traces_when_current_year_absent(two_year_df: pl.DataFrame) -> None:
+    """If current_year has no matching row in the aggregated data, no dotted trace is added."""
+    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2025)
+    dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
+    assert len(dot_traces) == 0
+
+
+# ---------------------------------------------------------------------------
+# hot_cold_yearly_figure — HotDayDefinition
+# ---------------------------------------------------------------------------
+
+
+def test_hot_cold_yearly_figure_hot_trace_name_contains_definition_label() -> None:
+    """Solid hot trace name must embed the definition's label string."""
+    definition = TmaxOnly(32.0)
+    df = pl.DataFrame(
+        {
+            "DATE": [date(2020, 7, 1)],
+            "temp_min": [15.0],
+            "temp_max": [33.0],
+        },
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+    fig = hot_cold_yearly_figure(df, "STATION", definition=definition)
+    hot_trace = next(t for t in fig.data if "hot" in t.name.lower())
+    assert definition.label in hot_trace.name
