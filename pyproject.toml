@@ -8,6 +8,7 @@ dependencies = [
     "plotly>=6.6.0",
     "polars>=1.39.3",
     "requests>=2.33.1",
+    "waitress>=3.0.0",
 ]
 
 [dependency-groups]

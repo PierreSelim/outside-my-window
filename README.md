@@ -32,6 +32,21 @@ Then open [http://127.0.0.1:8050](http://127.0.0.1:8050) in your browser.
 
 The landing page is a map of all stations. Click a station to view its temperature, precipitation, and wind history. Department data is fetched from Météo-France on first visit and cached locally under `data/cache/`.
 
+## Run as a desktop app (Electron)
+
+**Additional requirements:** [Node.js](https://nodejs.org/) (includes npm)
+
+```bash
+npm install        # install Electron (one-time)
+npm start          # launch the desktop window
+```
+
+This starts a local [waitress](https://docs.pylonsproject.org/projects/waitress/) server on a random port (8050–8149) and opens it in an Electron window. The Python sidecar is killed automatically when you close the window.
+
+Data is cached for 6 hours; press **Ctrl+Shift+R** (**Cmd+Shift+R** on macOS) to force-refresh the latest data immediately instead of waiting for the cache to expire.
+
+The `uv run python app.py` workflow above still works for browser-based development.
+
 ## Run the tests
 
 ```bash
