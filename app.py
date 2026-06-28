@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dash import Dash, Input, Output, dcc, html
 
+from src.data_loader import clear_cache
 from src.pages import map_page, station_page
 
 # suppress_callback_exceptions: callbacks reference component IDs that only exist
@@ -33,6 +34,13 @@ def render_page(pathname: str, search: str) -> html.Div:
     if pathname == "/station":
         return station_page.layout(search or "")
     return map_page.layout()
+
+
+@app.server.route("/api/refresh", methods=["POST"])
+def refresh_data() -> tuple[str, int]:
+    """Force the next page load to re-fetch LATEST-period data instead of serving cached data."""
+    clear_cache()
+    return "", 204
 
 
 if __name__ == "__main__":

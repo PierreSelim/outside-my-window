@@ -267,6 +267,18 @@ def load_department_cached(dept: str) -> pl.DataFrame | None:
     return _dept_cache[dept]
 
 
+def clear_cache() -> None:
+    """Force the next request to fetch fresh LATEST-period data instead of serving cached data.
+
+    Drops the in-process cache and deletes disk-cached LATEST files, which would
+    otherwise be served as-is for up to _LATEST_TTL_SECONDS.
+    """
+    _dept_cache.clear()
+    _dept_cache_time.clear()
+    for path in CACHE_DIR.glob(f"*{Period.LATEST.value}*"):
+        path.unlink(missing_ok=True)
+
+
 def stations_from(df: pl.DataFrame) -> list[Station]:
     """Extract the unique list of stations from a department DataFrame."""
     return [

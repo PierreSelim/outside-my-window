@@ -1,0 +1,12 @@
+{
+  "name": "outside-my-window",
+  "version": "0.1.0",
+  "description": "Outside My Window — Météo France weather visualization",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^42.5.0"
+  }
+}

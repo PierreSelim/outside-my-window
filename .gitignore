@@ -27,6 +27,9 @@ htmlcov/
 # Claude Code
 .claude/
 
+# Node
+node_modules/
+
 # IDEs
 .vscode/
 .idea/

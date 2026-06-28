@@ -98,6 +98,10 @@ Multi-page routing via `dcc.Location` + a top-level callback in `app.py` that re
 - Year range slider — default window: last 20 years
 - Three tabs: **Daily charts**, **Yearly extremes**, **Monthly averages**
 - Department data loaded lazily on first visit, cached server-side in `_dept_cache`
+- LATEST-period data refreshes automatically after 6h (`_LATEST_TTL_SECONDS`); a `POST /api/refresh`
+  route (used by the Electron app's Ctrl/Cmd+Shift+R shortcut) force-clears the in-process cache and
+  deletes the disk-cached LATEST file so the next load re-fetches immediately — see `clear_cache()`
+  in `data_loader.py`
 
 #### Daily charts tab
 - Granularity radio (Day / Week / Month) — default Day
