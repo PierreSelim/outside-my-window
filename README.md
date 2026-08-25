@@ -22,6 +22,14 @@ uv run python scripts/build_station_index.py
 
 This fetches the latest-period file for each department sequentially and writes `data/stations.json`.
 
+## Build the resource index
+
+Downloads use stable data.gouv.fr permalinks resolved from `data/resources.json`. Rebuild it only if the dataset re-issues resources with new ids:
+
+```bash
+uv run python scripts/build_resource_index.py
+```
+
 ## Run the app
 
 ```bash

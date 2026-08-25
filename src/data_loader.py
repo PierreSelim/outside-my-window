@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass
@@ -9,8 +10,16 @@ from pathlib import Path
 import polars as pl
 import requests
 
-BASE_URL = "https://object.files.data.gouv.fr/meteofrance/data/synchro_ftp/BASE/QUOT"
+# Stable data.gouv.fr permalink: redirects to whatever storage host is live, so a
+# host migration never breaks us. Rebuild data/resources.json with
+# scripts/build_resource_index.py if the dataset re-issues resources with new ids.
+DATAGOUV_RESOURCE_URL = "https://www.data.gouv.fr/api/1/datasets/r"
 CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
+
+# (dept, period.value) → data.gouv.fr resource-id, built by scripts/build_resource_index.py
+_RESOURCE_INDEX: dict[str, dict[str, str]] = json.loads(
+    (Path(__file__).parent.parent / "data" / "resources.json").read_text(encoding="utf-8")
+)
 
 # Columns we actually need for visualisation — the raw files have 60 columns
 KEEP_COLS: list[str] = [
@@ -134,8 +143,12 @@ _META_COLS: list[str] = ["lat", "lon", "altitude"]
 _LATEST_TTL_SECONDS: int = 6 * 3600
 
 
-def _file_url(dept: str, period: Period) -> str:
-    return f"{BASE_URL}/Q_{dept}_{period.value}_RR-T-Vent.csv.gz"
+def _file_url(dept: str, period: Period) -> str | None:
+    """Stable permalink for (dept, period), or None if the resource is unknown."""
+    resource_id = _RESOURCE_INDEX.get(dept, {}).get(period.value)
+    if resource_id is None:
+        return None
+    return f"{DATAGOUV_RESOURCE_URL}/{resource_id}"
 
 
 def _cache_path(dept: str, period: Period) -> Path:
@@ -148,6 +161,8 @@ def _is_stale(path: Path) -> bool:
 
 def _download(dept: str, period: Period) -> Path | None:
     url = _file_url(dept, period)
+    if url is None:
+        return None
     response = requests.get(url, timeout=30)
     if response.status_code != 200:
         return None
