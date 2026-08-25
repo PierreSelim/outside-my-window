@@ -7,7 +7,7 @@ published on [data.gouv.fr](https://www.data.gouv.fr/datasets/donnees-climatolog
 ## Data Source
 - **Dataset**: Données climatologiques de base quotidiennes (Météo-France)
 - **Scope**: `RR-T-Vent` files only (precipitation, temperature, wind)
-- **URL pattern**: `https://object.files.data.gouv.fr/meteofrance/data/synchro_ftp/BASE/QUOT/Q_{dept}_{period}_RR-T-Vent.csv.gz`
+- **URL pattern**: stable data.gouv.fr permalink `https://www.data.gouv.fr/api/1/datasets/r/{resource-id}` (302-redirects to the live storage host, so a host migration never breaks us). The `(dept, period) → resource-id` map lives in `data/resources.json`, built by `scripts/build_resource_index.py`. Replaced the former hardcoded storage host after the `object.files.data.gouv.fr` mirror stopped syncing in June 2026.
 - **Periods per department**:
   - `1852-1949` — historical, annual updates
   - `previous-1950-2024` — modern, monthly updates

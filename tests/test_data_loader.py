@@ -14,6 +14,7 @@ from src.data_loader import (
     Station,
     _download,
     _fetch,
+    _file_url,
     _is_stale,
     _parse,
     aggregate,
@@ -414,4 +415,29 @@ def test_download_returns_none_on_http_error() -> None:
     with patch("src.data_loader.requests.get") as mock_get:
         mock_get.return_value.status_code = 404
         result = _download("99", Period.LATEST)
+    assert result is None
+
+
+def test_file_url_resolves_known_resource() -> None:
+    index = {"31": {Period.LATEST.value: "abc-123"}}
+    with patch("src.data_loader._RESOURCE_INDEX", index):
+        url = _file_url("31", Period.LATEST)
+    assert url == "https://www.data.gouv.fr/api/1/datasets/r/abc-123"
+
+
+def test_file_url_returns_none_for_unknown_dept() -> None:
+    with patch("src.data_loader._RESOURCE_INDEX", {}):
+        assert _file_url("99", Period.LATEST) is None
+
+
+def test_file_url_returns_none_for_missing_period() -> None:
+    index = {"31": {Period.LATEST.value: "abc-123"}}
+    with patch("src.data_loader._RESOURCE_INDEX", index):
+        assert _file_url("31", Period.HISTORICAL) is None
+
+
+def test_download_returns_none_when_url_unknown() -> None:
+    with patch("src.data_loader._RESOURCE_INDEX", {}), patch("src.data_loader.requests.get") as mock_get:
+        result = _download("99", Period.LATEST)
+    mock_get.assert_not_called()
     assert result is None
