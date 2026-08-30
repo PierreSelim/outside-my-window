@@ -10,6 +10,7 @@ import polars as pl
 from dash import Dash, Input, Output, State, dcc, html
 
 from src.charts import (
+    density_comparison_figure,
     empty_figure,
     hot_cold_yearly_figure,
     monthly_avg_temp_by_decade_figure,
@@ -27,15 +28,31 @@ from src.data_loader import (
     stations_from,
 )
 from src.departments import DEPT_NAMES
-from src.transforms import DEFAULT_HOT_DAY, HOT_DAY_OPTIONS, LinearTrend, hot_day_from, linear_trend, yearly_hot_cold
+from src.transforms import (
+    DEFAULT_HOT_DAY,
+    DEFAULT_WINDOW,
+    HOT_DAY_OPTIONS,
+    DayWindow,
+    Distribution,
+    LinearTrend,
+    YearSpan,
+    describe,
+    hot_day_from,
+    linear_trend,
+    window_filter,
+    year_filter,
+    yearly_hot_cold,
+)
 
 _DEFAULT_YEAR_WINDOW: int = 20
+_COMPARISON_SPAN: int = 30
 _NO_DATA = "No data available"
-
-
-# ---------------------------------------------------------------------------
-# Layout helpers
-# ---------------------------------------------------------------------------
+_COMPARISON_TAB = "comparison"
+_FALLBACK_YEARS: YearSpan = YearSpan(1950, 2026)
+# ponytail: DatePickerRange needs a year; 2000 is a leap year so 29 Feb stays selectable.
+# Only month/day are read back -- see DayWindow.from_dates.
+_WINDOW_REF_YEAR: int = 2000
+_CELL: dict[str, str] = {"paddingRight": "1.5rem"}
 
 
 def _chart_card(graph_id: str) -> html.Div:
@@ -43,6 +60,46 @@ def _chart_card(graph_id: str) -> html.Div:
         className="card card--flush",
         children=[
             dcc.Graph(id=graph_id, config={"displayModeBar": False}),
+        ],
+    )
+
+
+def _record_years(df: pl.DataFrame | None) -> YearSpan:
+    """First and last year covered by a DataFrame, or a sane span when there is no data."""
+    first = df["DATE"].min() if df is not None else None
+    last = df["DATE"].max() if df is not None else None
+    if isinstance(first, _date) and isinstance(last, _date):
+        return YearSpan.of(first.year, last.year)
+    return _FALLBACK_YEARS
+
+
+def _year_input(component_id: str, value: int, record: YearSpan) -> dcc.Input:
+    return dcc.Input(
+        id=component_id,
+        type="number",
+        min=record.start,
+        max=record.end,
+        step=1,
+        value=value,
+        debounce=True,
+        className="year-input",
+    )
+
+
+def _period_group(label: str, prefix: str, span: YearSpan, record: YearSpan) -> html.Div:
+    """Two year boxes rather than a range slider: periods are typed exactly, not scrubbed."""
+    return html.Div(
+        className="control-group control-group--period",
+        children=[
+            html.Label(label, className="control-label"),
+            html.Div(
+                className="period-range",
+                children=[
+                    _year_input(f"{prefix}-start", span.start, record),
+                    html.Span("–", className="period-dash"),
+                    _year_input(f"{prefix}-end", span.end, record),
+                ],
+            ),
         ],
     )
 
@@ -61,16 +118,16 @@ def layout(search: str = "") -> html.Div:
     df = load_department_cached(dept) if dept else None
     stations: list[Station] = stations_from(df) if df is not None else []
 
-    _date_min = df["DATE"].min() if df is not None else None
-    _date_max = df["DATE"].max() if df is not None else None
-    year_min = _date_min.year if isinstance(_date_min, _date) else 1950
-    year_max = _date_max.year if isinstance(_date_max, _date) else 2026
+    record = _record_years(df)
+    year_min, year_max = record.start, record.end
     marks = {y: str(y) for y in range(year_min, year_max + 1, 10)}
 
     valid_ids = {s.station_id for s in stations}
     if initial_station not in valid_ids:
         initial_station = stations[0].station_id if stations else None
 
+    span_a = YearSpan.of(year_min, min(year_max, year_min + _COMPARISON_SPAN - 1))
+    span_b = YearSpan.of(max(year_min, year_max - _COMPARISON_SPAN + 1), year_max)
     station_options = [{"label": s.name, "value": s.station_id} for s in stations]
     dept_label = f"{DEPT_NAMES.get(dept, dept)} ({dept})" if dept else ""
 
@@ -105,6 +162,7 @@ def layout(search: str = "") -> html.Div:
                                 ],
                             ),
                             html.Div(
+                                id="year-slider-group",
                                 className="control-group control-group--slider",
                                 children=[
                                     html.Label("Year range", className="control-label"),
@@ -228,30 +286,72 @@ def layout(search: str = "") -> html.Div:
                             _chart_card("chart-monthly-avg-temp-decade"),
                         ],
                     ),
+                    dcc.Tab(
+                        label="Then vs now",
+                        value=_COMPARISON_TAB,
+                        className="station-tab station-tab--feature",
+                        selected_className="station-tab station-tab--feature station-tab--selected",
+                        style={},
+                        selected_style={},
+                        children=[
+                            html.Div(
+                                className="card",
+                                children=[
+                                    html.Div(
+                                        className="controls-row",
+                                        children=[
+                                            html.Div(
+                                                className="control-group",
+                                                children=[
+                                                    html.Label("Season window (shared)", className="control-label"),
+                                                    dcc.DatePickerRange(
+                                                        id="cmp-window",
+                                                        display_format="DD MMM",
+                                                        min_date_allowed=_date(_WINDOW_REF_YEAR, 1, 1).isoformat(),
+                                                        max_date_allowed=_date(_WINDOW_REF_YEAR, 12, 31).isoformat(),
+                                                        start_date=_date(_WINDOW_REF_YEAR, 6, 1).isoformat(),
+                                                        end_date=_date(_WINDOW_REF_YEAR, 8, 31).isoformat(),
+                                                    ),
+                                                ],
+                                            ),
+                                            _period_group("Period A", "cmp-a", span_a, record),
+                                            _period_group("Period B", "cmp-b", span_b, record),
+                                            html.Span(
+                                                f"Record: {year_min}–{year_max}",
+                                                className="control-hint",
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            _chart_card("chart-density-tmax"),
+                            _chart_card("chart-density-tmin"),
+                            html.Div(id="cmp-stats"),
+                        ],
+                    ),
                 ],
             ),
         ],
     )
 
 
-# ---------------------------------------------------------------------------
-# Callbacks
-# ---------------------------------------------------------------------------
-
-
-def _filtered_station_df(station_id: int | None, year_range: list[int], dept: str | None) -> pl.DataFrame | None:
-    """Return a station+year-filtered DataFrame, or None if inputs are invalid / no data."""
+def _station_df(station_id: int | None, dept: str | None) -> pl.DataFrame | None:
+    """Return the full record for one station, or None if inputs are invalid / no data."""
     if dept is None or station_id is None:
         return None
     df_full = load_department_cached(dept)
     if df_full is None:
         return None
-    year_start, year_end = year_range
-    df = df_full.filter(
-        (pl.col("station_id") == station_id)
-        & (pl.col("DATE").dt.year() >= year_start)
-        & (pl.col("DATE").dt.year() <= year_end)
-    )
+    df = df_full.filter(pl.col("station_id") == station_id)
+    return df if not df.is_empty() else None
+
+
+def _filtered_station_df(station_id: int | None, year_range: list[int], dept: str | None) -> pl.DataFrame | None:
+    """Return a station+year-filtered DataFrame, or None if inputs are invalid / no data."""
+    df = _station_df(station_id, dept)
+    if df is None:
+        return None
+    df = year_filter(df, YearSpan.of(*year_range))
     return df if not df.is_empty() else None
 
 
@@ -296,7 +396,7 @@ def update_yearly_chart(
     current_year = datetime.date.today().year
     definition = hot_day_from(definition_label)
     show_trend = "show" in (trend_values or [])
-    provisional = current_year if year_range[1] >= current_year else None
+    provisional = current_year if YearSpan.of(*year_range).end >= current_year else None
 
     fig = hot_cold_yearly_figure(
         df,
@@ -359,7 +459,114 @@ def update_monthly_charts(
     )
 
 
+def _window_from(start_date: str | None, end_date: str | None) -> DayWindow:
+    if not start_date or not end_date:
+        return DEFAULT_WINDOW
+    return DayWindow.from_dates(_date.fromisoformat(start_date[:10]), _date.fromisoformat(end_date[:10]))
+
+
+def _typed_span(start: int | None, end: int | None, fallback: YearSpan) -> YearSpan:
+    """A year box cleared to empty falls back to the record bound rather than blanking the chart."""
+    return YearSpan.of(
+        start if start is not None else fallback.start,
+        end if end is not None else fallback.end,
+    )
+
+
+def _describe_cell(dist: Distribution | None) -> str:
+    if dist is None:
+        return "no data"
+    return f"n={dist.n} \u00b7 mean {dist.mean:.1f} \u00b7 median {dist.median:.1f} \u00b7 p90 {dist.p90:.1f} \u00b0C"
+
+
+def _delta_cell(a: Distribution | None, b: Distribution | None) -> str:
+    if a is None or b is None:
+        return "\u2014"
+    return f"\u0394 mean {b.mean - a.mean:+.1f} \u00b7 \u0394 p90 {b.p90 - a.p90:+.1f} \u00b0C"
+
+
+def _stats_card(
+    rows: list[tuple[str, Distribution | None, Distribution | None]],
+    label_a: str,
+    label_b: str,
+) -> list[Any]:
+    """Numeric companion to the density overlay: where each period sits and how far apart they are."""
+    if all(a is None and b is None for _, a, b in rows):
+        return []
+    header = html.Tr(
+        [
+            html.Th(""),
+            html.Th(label_a, style=_CELL),
+            html.Th(label_b, style=_CELL),
+            html.Th("Shift"),
+        ],
+        style={"textAlign": "left"},
+    )
+    body = [
+        html.Tr(
+            [
+                html.Td(html.Strong(name), style=_CELL),
+                html.Td(_describe_cell(a), style=_CELL),
+                html.Td(_describe_cell(b), style=_CELL),
+                html.Td(_delta_cell(a, b)),
+            ]
+        )
+        for name, a, b in rows
+    ]
+    return [html.Div(className="card", children=[html.Table([html.Thead(header), html.Tbody(body)])])]
+
+
+def update_comparison_charts(
+    station_id: int | None,
+    dept: str | None,
+    a_start: int | None,
+    a_end: int | None,
+    b_start: int | None,
+    b_end: int | None,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[go.Figure, go.Figure, list[Any]]:
+    """Overlay the Tmax and Tmin densities of two year ranges over a shared calendar window."""
+    df = _station_df(station_id, dept)
+    if df is None:
+        placeholder = empty_figure(_NO_DATA)
+        return placeholder, placeholder, []
+
+    record = _record_years(df)
+    span_a = _typed_span(a_start, a_end, record)
+    span_b = _typed_span(b_start, b_end, record)
+    window = _window_from(start_date, end_date)
+    df_a = window_filter(df, span_a, window)
+    df_b = window_filter(df, span_b, window)
+    label_a, label_b = span_a.label, span_b.label
+    station_name = df["station_name"][0]
+
+    def figure(col: str, what: str) -> go.Figure:
+        return density_comparison_figure(
+            df_a[col],
+            df_b[col],
+            label_a,
+            label_b,
+            f"{what} distribution, {window.label} \u2014 {station_name}",
+        )
+
+    rows = [
+        (what, describe(df_a[col]), describe(df_b[col])) for what, col in (("Tmax", "temp_max"), ("Tmin", "temp_min"))
+    ]
+    return figure("temp_max", "Daily Tmax"), figure("temp_min", "Daily Tmin"), _stats_card(rows, label_a, label_b)
+
+
+def year_slider_style(tab: str | None) -> dict[str, str]:
+    """Hide the page-level year range on the tab that brings its own two periods."""
+    return {"display": "none"} if tab == _COMPARISON_TAB else {}
+
+
 def register_callbacks(app: Dash) -> None:
+    app.callback(
+        Output("year-slider-group", "style"),
+        Input("station-tabs", "value"),
+    )(year_slider_style)
+
     app.callback(
         Output("chart-temperature", "figure"),
         Output("chart-precipitation", "figure"),
@@ -387,3 +594,17 @@ def register_callbacks(app: Dash) -> None:
         Input("year-slider", "value"),
         State("dept-store", "data"),
     )(update_monthly_charts)
+
+    app.callback(
+        Output("chart-density-tmax", "figure"),
+        Output("chart-density-tmin", "figure"),
+        Output("cmp-stats", "children"),
+        Input("station-dropdown", "value"),
+        State("dept-store", "data"),
+        Input("cmp-a-start", "value"),
+        Input("cmp-a-end", "value"),
+        Input("cmp-b-start", "value"),
+        Input("cmp-b-end", "value"),
+        Input("cmp-window", "start_date"),
+        Input("cmp-window", "end_date"),
+    )(update_comparison_charts)

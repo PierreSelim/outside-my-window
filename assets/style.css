@@ -12,6 +12,8 @@
   --clr-primary:       #4C9BE8;
   --clr-primary-dark:  #2B7ACC;
   --clr-primary-light: rgba(76, 155, 232, 0.10);
+  --clr-accent:        #E2703A;
+  --clr-accent-light:  rgba(226, 112, 58, 0.10);
   --clr-surface:       #FFFFFF;
   --clr-bg:            #F1F5F9;
   --clr-border:        #E2E8F0;
@@ -129,6 +131,7 @@ body {
 
 .control-group--station     { flex: 0 0 300px; }
 .control-group--slider      { flex: 1 1 300px; }
+.control-group--period      { flex: 0 0 auto; }
 .control-group--granularity { flex: 0 0 auto; }
 
 .control-label {
@@ -137,6 +140,37 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--clr-text-muted);
+}
+
+.control-hint {
+  font-size: 0.75rem;
+  color: var(--clr-text-faint);
+  padding-bottom: 0.55rem;
+}
+
+.period-range {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.period-dash { color: var(--clr-text-faint); }
+
+.year-input {
+  width: 5rem;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  color: var(--clr-text-base);
+  background: var(--clr-surface);
+  border: 1px solid var(--clr-border);
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+
+.year-input:focus {
+  outline: none;
+  border-color: var(--clr-primary);
+  box-shadow: 0 0 0 3px var(--clr-primary-light);
 }
 
 /* ============================================================
@@ -241,6 +275,35 @@ body {
 
 .station-tab:hover::after {
   background: var(--clr-border);
+}
+
+/* Comparison tab: last in the bar, pushed right and accented so it reads
+   as the headline view rather than the leftover one. */
+.station-tab--feature {
+  margin-left: auto !important;
+  color: var(--clr-accent) !important;
+}
+
+.station-tab--feature::before {
+  content: '◉';
+  margin-right: 0.4rem;
+  font-size: 0.75em;
+  vertical-align: 0.1em;
+}
+
+.station-tab--feature:hover {
+  color: var(--clr-accent) !important;
+  background: var(--clr-accent-light) !important;
+}
+
+.station-tab--feature:hover::after { background: var(--clr-accent); }
+
+.station-tab--feature.station-tab--selected {
+  color: var(--clr-accent) !important;
+}
+
+.station-tab--feature.station-tab--selected::after {
+  background: var(--clr-accent) !important;
 }
 
 /* Selected tab */

@@ -7,6 +7,7 @@ import polars as pl
 import pytest
 
 from src.charts import (
+    density_comparison_figure,
     empty_figure,
     hot_cold_yearly_figure,
     monthly_avg_temp_by_decade_figure,
@@ -540,3 +541,67 @@ def test_hot_cold_yearly_figure_hot_trace_name_contains_definition_label() -> No
     fig = hot_cold_yearly_figure(df, "STATION", definition=definition)
     hot_trace = next(t for t in fig.data if "hot" in t.name.lower())
     assert definition.label in hot_trace.name
+
+
+# ---------------------------------------------------------------------------
+# density_comparison_figure
+# ---------------------------------------------------------------------------
+
+_SERIES_A = pl.Series([20.0, 21.0, 21.5, 22.0, 22.5, 23.0, 24.0])
+_SERIES_B = pl.Series([24.0, 25.0, 25.5, 26.0, 26.5, 27.0, 28.0])
+
+
+def test_density_comparison_figure_has_two_line_traces() -> None:
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "A", "B", "Title")
+    assert len(fig.data) == 2
+    assert all(trace.mode == "lines" for trace in fig.data)
+
+
+def test_density_comparison_figure_curves_are_smooth_not_binned() -> None:
+    """A histogram would give a handful of flat steps; a KDE gives a dense curve."""
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "A", "B", "Title")
+    assert len(fig.data[0].x) > 100
+    assert len(set(fig.data[0].y)) > 100
+
+
+def test_density_comparison_figure_curves_are_filled_to_zero() -> None:
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "A", "B", "Title")
+    assert all(trace.fill == "tozeroy" for trace in fig.data)
+
+
+def test_density_comparison_figure_draws_a_mean_line_per_period() -> None:
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "A", "B", "Title")
+    assert len(fig.layout.shapes) == 2
+    assert {round(shape.x0, 1) for shape in fig.layout.shapes} == {22.0, 26.0}
+
+
+def test_density_comparison_figure_uses_the_labels_as_trace_names() -> None:
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "1961-1990", "1995-2024", "Title")
+    assert [trace.name for trace in fig.data] == ["1961-1990", "1995-2024"]
+
+
+def test_density_comparison_figure_title() -> None:
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "A", "B", "Daily Tmax")
+    assert fig.layout.title.text == "Daily Tmax"
+
+
+def test_density_comparison_figure_separated_samples_peak_apart() -> None:
+    fig = density_comparison_figure(_SERIES_A, _SERIES_B, "A", "B", "Title")
+    peaks = [trace.x[max(range(len(trace.y)), key=lambda i: trace.y[i])] for trace in fig.data]
+    assert peaks[0] < peaks[1]
+
+
+def test_density_comparison_figure_empty_period_returns_placeholder() -> None:
+    fig = density_comparison_figure(pl.Series([], dtype=pl.Float64), _SERIES_B, "A", "B", "Title")
+    assert len(fig.data) == 0
+
+
+def test_density_comparison_figure_all_null_period_returns_placeholder() -> None:
+    fig = density_comparison_figure(_SERIES_A, pl.Series([None, None], dtype=pl.Float64), "A", "B", "Title")
+    assert len(fig.data) == 0
+
+
+def test_density_comparison_figure_constant_period_returns_placeholder() -> None:
+    """A zero-variance sample has no bandwidth and therefore no density."""
+    fig = density_comparison_figure(pl.Series([20.0] * 10), _SERIES_B, "A", "B", "Title")
+    assert len(fig.data) == 0

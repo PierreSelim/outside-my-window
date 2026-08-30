@@ -7,11 +7,15 @@ import plotly.graph_objects as go
 import polars as pl
 
 from src.data_loader import HOT_DAY_TMAX, HOT_DAY_TMIN, Granularity
-from src.transforms import DEFAULT_HOT_DAY, HotDayDefinition, LinearTrend, linear_trend, yearly_hot_cold
-
-# ---------------------------------------------------------------------------
-# Colour palette
-# ---------------------------------------------------------------------------
+from src.transforms import (
+    DEFAULT_HOT_DAY,
+    Density,
+    HotDayDefinition,
+    LinearTrend,
+    gaussian_kde,
+    linear_trend,
+    yearly_hot_cold,
+)
 
 _BLUE = "#4C9BE8"
 _RED = "#E85C4C"
@@ -21,10 +25,6 @@ _BAND_FILL = "rgba(76, 155, 232, 0.15)"
 _HOT_DAY_FILL = "rgba(230, 80, 0, 0.15)"
 _TMAX_SIGMA_FILL = "rgba(232, 92, 76, 0.15)"
 _TMIN_SIGMA_FILL = "rgba(76, 155, 232, 0.15)"
-
-# ---------------------------------------------------------------------------
-# Grid / axis style
-# ---------------------------------------------------------------------------
 
 _GRID_BASE: dict[str, Any] = {"showgrid": True, "gridcolor": "#E2E8F0", "gridwidth": 1}
 _YAXIS_GRID: dict[str, Any] = {
@@ -44,11 +44,6 @@ _TMIN_GRADIENT_END: tuple[int, int, int] = (0, 0, 139)  # dark blue
 
 _MONTH_LABELS: list[str] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 _MONTH_SPINE: pl.DataFrame = pl.DataFrame({"month": list(range(1, 13))}, schema={"month": pl.UInt32})
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 _FONT_FAMILY = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
@@ -173,11 +168,6 @@ def _add_sigma_band(
     )
 
 
-# ---------------------------------------------------------------------------
-# Individual figures
-# ---------------------------------------------------------------------------
-
-
 def temperature_figure(
     df: pl.DataFrame,
     station_name: str,
@@ -186,8 +176,7 @@ def temperature_figure(
     """Line chart: TN/TX shaded band."""
     fig = go.Figure()
 
-    # Plotly filled-area bands require two traces: upper (temp_max) drawn first;
-    # the lower trace uses fill="tonexty" to shade between them.
+    # a shaded band needs both bounds present on the same row, else fill="tonexty" leaks
     df_band = df.filter(pl.col("temp_min").is_not_null() & pl.col("temp_max").is_not_null())
     dates = df_band["DATE"].to_list()
 
@@ -503,6 +492,53 @@ def monthly_avg_temp_by_decade_figure(df: pl.DataFrame, station_name: str) -> go
 
     _apply_standard_layout(fig, f"Monthly average temperatures by decade — {station_name}", "°C")
     fig.update_yaxes(dtick=2, **_YAXIS_GRID)
+    return fig
+
+
+_DENSITY_FILL_A = "rgba(76, 155, 232, 0.22)"
+_DENSITY_FILL_B = "rgba(232, 92, 76, 0.22)"
+
+
+def _add_density_trace(fig: go.Figure, density: Density, name: str, color: str, fill: str) -> None:
+    fig.add_trace(
+        go.Scatter(
+            x=density.x,
+            y=density.y,
+            name=name,
+            mode="lines",
+            line={"color": color, "width": 1.75, "shape": "spline"},
+            fill="tozeroy",
+            fillcolor=fill,
+            hovertemplate="%{x:.1f} °C<br>density %{y:.3f}<extra>" + name + "</extra>",
+        )
+    )
+
+
+def density_comparison_figure(
+    series_a: pl.Series,
+    series_b: pl.Series,
+    label_a: str,
+    label_b: str,
+    title: str,
+) -> go.Figure:
+    """Overlay the smoothed probability density of two temperature samples."""
+    density_a = gaussian_kde(series_a)
+    density_b = gaussian_kde(series_b)
+    if density_a is None or density_b is None:
+        return empty_figure("Not enough data in one of the two periods")
+
+    fig = go.Figure()
+    _add_density_trace(fig, density_a, label_a, _BLUE, _DENSITY_FILL_A)
+    _add_density_trace(fig, density_b, label_b, _RED, _DENSITY_FILL_B)
+
+    for series, color in ((series_a, _BLUE), (series_b, _RED)):
+        mean = series.drop_nulls().mean()
+        if isinstance(mean, (int, float)):
+            fig.add_vline(x=float(mean), line={"color": color, "width": 1.5, "dash": "dash"})
+
+    _apply_standard_layout(fig, title, "Probability density", hovermode="x")
+    fig.update_xaxes(title_text="°C", dtick=5, **_XAXIS_GRID)
+    fig.update_yaxes(rangemode="tozero", **_YAXIS_GRID)
     return fig
 
 

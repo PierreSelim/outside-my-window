@@ -5,7 +5,7 @@
 
 Visualization app for French daily climatological data from Météo-France ([data.gouv.fr](https://www.data.gouv.fr/datasets/donnees-climatologiques-de-base-quotidiennes)).
 
-Select a department, a weather station, and a year range to explore temperature, precipitation, and wind history.
+Select a department, a weather station, and a year range to explore temperature, precipitation, and wind history, or compare the temperature distribution of two periods.
 
 ## Requirements
 
@@ -82,3 +82,10 @@ Track hot days (Tmin ≥ 20 °C and Tmax ≥ 35 °C) and cold days (Tmin < 0 °C
 Compare average Tmin and Tmax by month of year, either over the full record or broken down by decade to visualise long-term shifts.
 
 ![Monthly averages](docs/screenshots/outside-my-window_station_averages.png)
+
+### Comparison
+Overlay the smoothed probability density of daily Tmax and Tmin for two year ranges over the same
+season window (e.g. 1 Jun – 31 Aug, 1961–1990 against 1995–2024), so the shift of the whole
+distribution — and of its hot tail — is directly readable. Curves are Gaussian kernel density
+estimates with a Silverman bandwidth. A stats line below gives the mean, median and p90 of each
+period plus the shift between them.
