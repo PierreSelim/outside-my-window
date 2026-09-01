@@ -14,13 +14,18 @@ Select a department, a weather station, and a year range to explore temperature,
 
 ## Build the station index
 
-The map requires a pre-built index of all stations. Run this once (and again if the station network changes):
+`data/stations.json` is committed, so this is only needed when the station network changes:
 
 ```bash
-uv run python scripts/build_station_index.py
+uv run python scripts/build_station_index.py          # full: positions + record span
+uv run python scripts/build_station_index.py --fast   # positions only, much quicker
 ```
 
-This fetches the latest-period file for each department sequentially and writes `data/stations.json`.
+The full run reads all three periods of every department (~1.5 GB of downloads, cached under
+`data/cache/`, one request at a time) because a station's first year is only knowable from the
+historical files. It records `first_year` / `last_year` / `n_years`, which the map uses to colour
+markers by record length. `--fast` reads the latest period alone and omits those fields; the map
+then falls back to a single colour. Either way the index lists the stations still reporting today.
 
 ## Build the resource index
 
@@ -45,15 +50,33 @@ The landing page is a map of all stations. Click a station to view its temperatu
 **Additional requirements:** [Node.js](https://nodejs.org/) (includes npm)
 
 ```bash
-npm install        # install Electron (one-time)
-npm start          # launch the desktop window
+npm install        # install Electron + electron-builder (one-time)
+npm start          # launch the desktop window against this checkout
 ```
 
-This starts a local [waitress](https://docs.pylonsproject.org/projects/waitress/) server on a random port (8050–8149) and opens it in an Electron window. The Python sidecar is killed automatically when you close the window.
+This starts a local [waitress](https://docs.pylonsproject.org/projects/waitress/) server on a free
+port and opens it in an Electron window. The Python sidecar is killed when you close the window.
 
-Data is cached for 6 hours; press **Ctrl+Shift+R** (**Cmd+Shift+R** on macOS) to force-refresh the latest data immediately instead of waiting for the cache to expire.
+Data is cached for 6 hours; press **Ctrl+Shift+R** (**Cmd+Shift+R** on macOS) to force-refresh the
+latest data immediately instead of waiting for the cache to expire.
 
 The `uv run python app.py` workflow above still works for browser-based development.
+
+## Build an installable desktop app
+
+```bash
+npm run dist       # installer for the current platform, into release/
+npm run dist:dir   # unpacked app only, into release/, for a quick check
+```
+
+`npm run dist` first freezes the Python server with PyInstaller into `sidecar/omw-server/`
+(`npm run build:server` does that step alone), then has electron-builder package it as an
+NSIS installer on Windows, a dmg on macOS, or an AppImage on Linux.
+
+**The result needs neither Python nor uv on the target machine** — the interpreter, the
+dependencies, the station index and the stylesheet are all inside the bundle. Expect ~600 MB
+unpacked, most of it Electron and Chromium. Downloaded weather data is written to the per-user
+application data directory, never next to the installed binary.
 
 ## Run the tests
 
@@ -64,22 +87,37 @@ uv run pytest tests/ --cov=src --cov-report=term-missing
 ## Features
 
 ### Station map
-Browse all Météo-France stations across metropolitan France and overseas departments. Click any marker to navigate directly to that station's history.
+Browse every Météo-France station still reporting, across metropolitan France and the overseas
+departments. Markers are coloured by how long the station's record runs, so a 100-year series is
+visible at a glance. Search by name from the map or from any station page — the search is the one
+control that crosses department boundaries.
 
 ![Station map](docs/screenshots/outside-my-window_station_map.png)
 
+### Station header
+Every station page opens with what the station is doing *now*: the latest observation read against
+the 1991–2020 WMO standard normal for that same calendar day, the anomaly, and where the day
+ranks among every year of the record. Below it, the all-time records — hottest day, coldest
+night, wettest day, strongest gust, longest run of hot days.
+
 ### Daily observations
-Explore daily temperature (min/max band), precipitation, and wind for any station and year range. Switch between daily, weekly, and monthly granularity.
+Explore daily temperature (min/max band), precipitation, and wind for any station and year range.
+Switch between daily, weekly, and monthly granularity: temperatures average, precipitation totals
+(`mm/week`, `mm/month`), and gusts report the period's peak. Gaps in the record are drawn as gaps.
 
 ![Daily observations](docs/screenshots/outside-my-window_station_observation.png)
 
 ### Yearly extremes
-Track hot days (Tmin ≥ 20 °C and Tmax ≥ 35 °C) and cold days (Tmin < 0 °C) year by year. Optional trend lines show the long-term evolution with slope and R².
+Track hot days (Tmax ≥ 30 °C by default, seven other definitions available), tropical nights
+(Tmin ≥ 20 °C) and frost days (Tmin < 0 °C) year by year. Years in which the station observed
+under 90 % of days are excluded and shaded grey rather than counted as cool ones. Optional trend
+lines show the long-term evolution with slope and R², computed on the fully observed years only.
 
 ![Yearly extremes](docs/screenshots/outside-my-window_station_extremes.png)
 
 ### Monthly averages
-Compare average Tmin and Tmax by month of year, either over the full record or broken down by decade to visualise long-term shifts.
+Compare average Tmin and Tmax by month of year, either over the full record or broken down by
+decade — pick which decades to overlay rather than reading all of them at once.
 
 ![Monthly averages](docs/screenshots/outside-my-window_station_averages.png)
 

@@ -1,26 +1,37 @@
 from __future__ import annotations
 
 import gzip
+import json
+import sys
 import time
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import polars as pl
 import pytest
 
+import src.data_loader as dl
 from src.data_loader import (
     Granularity,
+    IndexedStation,
     Period,
+    RecordSpan,
     Station,
+    _bundle_dir,
+    _default_cache_dir,
     _download,
     _fetch,
     _file_url,
     _is_stale,
     _parse,
     aggregate,
+    clear_cache,
     granularity_from,
     load_department,
     load_department_cached,
+    station_index,
     stations_from,
 )
 
@@ -172,7 +183,6 @@ def multi_week_df() -> pl.DataFrame:
             "DATE": [date(2020, 1, 6), date(2020, 1, 7), date(2020, 1, 13), date(2020, 1, 6)],
             "temp_min": [0.0, 2.0, 4.0, 1.0],
             "temp_max": [8.0, 10.0, 12.0, 9.0],
-            "temp_amplitude": [8.0, 8.0, 8.0, 8.0],
             "precipitation": [1.0, 3.0, 2.0, 0.5],
             "wind_mean": [2.0, 4.0, 3.0, None],
             "wind_gust": [5.0, 10.0, 7.0, None],
@@ -186,7 +196,6 @@ def multi_week_df() -> pl.DataFrame:
             "DATE": pl.Date,
             "temp_min": pl.Float64,
             "temp_max": pl.Float64,
-            "temp_amplitude": pl.Float64,
             "precipitation": pl.Float64,
             "wind_mean": pl.Float64,
             "wind_gust": pl.Float64,
@@ -207,13 +216,34 @@ def test_aggregate_week_reduces_row_count(multi_week_df: pl.DataFrame) -> None:
     assert len(result) == 3
 
 
-def test_aggregate_week_averages_values(multi_week_df: pl.DataFrame) -> None:
+def test_aggregate_week_averages_temperatures(multi_week_df: pl.DataFrame) -> None:
     result = aggregate(multi_week_df, Granularity.WEEK)
     toulouse = result.filter(pl.col("station_id") == 31001).sort("DATE")
     # Week 1 for Toulouse: Jan 6 and Jan 7 → mean temp_min = (0+2)/2 = 1.0
     week1 = toulouse.row(0, named=True)
     assert week1["temp_min"] == pytest.approx(1.0)
-    assert week1["precipitation"] == pytest.approx(2.0)  # (1+3)/2
+
+
+def test_aggregate_week_totals_precipitation(multi_week_df: pl.DataFrame) -> None:
+    # A week of rain is a total, not a daily average: 1 mm + 3 mm is a 4 mm week.
+    result = aggregate(multi_week_df, Granularity.WEEK)
+    week1 = result.filter(pl.col("station_id") == 31001).sort("DATE").row(0, named=True)
+    assert week1["precipitation"] == pytest.approx(4.0)
+
+
+def test_aggregate_week_takes_the_peak_gust(multi_week_df: pl.DataFrame) -> None:
+    # FXY is already a daily maximum; averaging maxima describes no wind that ever blew.
+    result = aggregate(multi_week_df, Granularity.WEEK)
+    week1 = result.filter(pl.col("station_id") == 31001).sort("DATE").row(0, named=True)
+    assert week1["wind_gust"] == pytest.approx(10.0)
+
+
+def test_aggregate_keeps_precipitation_null_when_the_station_measures_none(
+    multi_week_df: pl.DataFrame,
+) -> None:
+    df = multi_week_df.with_columns(pl.lit(None, dtype=pl.Float64).alias("precipitation"))
+    result = aggregate(df, Granularity.MONTH)
+    assert result["precipitation"].to_list() == [None, None]
 
 
 def test_aggregate_month_groups_all_january(multi_week_df: pl.DataFrame) -> None:
@@ -228,6 +258,7 @@ def test_aggregate_month_averages_values(multi_week_df: pl.DataFrame) -> None:
     # Jan 6, 7, 13 → temp_min mean = (0+2+4)/3
     assert toulouse["temp_min"] == pytest.approx(2.0)
     assert toulouse["wind_mean"] == pytest.approx(3.0)  # (2+4+3)/3
+    assert toulouse["precipitation"] == pytest.approx(6.0)  # 1+3+2
 
 
 def test_aggregate_preserves_null_columns(multi_week_df: pl.DataFrame) -> None:
@@ -250,17 +281,22 @@ def test_aggregate_week_date_is_week_start(multi_week_df: pl.DataFrame) -> None:
 def test_granularity_week_fields() -> None:
     assert Granularity.WEEK.label == "week"
     assert Granularity.WEEK.truncate_expr == "1w"
-    assert Granularity.WEEK.title_suffix == " (weekly avg)"
+    assert Granularity.WEEK.title_suffix == " (weekly)"
 
 
 def test_granularity_month_fields() -> None:
     assert Granularity.MONTH.label == "month"
     assert Granularity.MONTH.truncate_expr == "1mo"
-    assert Granularity.MONTH.title_suffix == " (monthly avg)"
+    assert Granularity.MONTH.title_suffix == " (monthly)"
+
+
+def test_granularity_per_unit_names_the_accumulation_period() -> None:
+    assert Granularity.DAY.per_unit("mm") == "mm"
+    assert Granularity.MONTH.per_unit("mm") == "mm/month"
 
 
 def test_granularity_day_is_identity() -> None:
-    assert Granularity.DAY.truncate_expr == ""
+    assert Granularity.DAY.truncate_expr is None
     assert Granularity.DAY.title_suffix == ""
 
 
@@ -289,47 +325,75 @@ def test_granularity_from_returns_day_for_unknown() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_load_department_cached_calls_load_department(sample_df: pl.DataFrame) -> None:
+@pytest.fixture
+def empty_dept_cache() -> Iterator[None]:
     import src.data_loader as dl
 
-    dept = "__test_dept__"
-    dl._dept_cache.pop(dept, None)
-    dl._dept_cache_time.pop(dept, None)
+    dl._dept_cache.clear()
+    yield
+    dl._dept_cache.clear()
+
+
+def test_load_department_cached_calls_load_department(sample_df: pl.DataFrame, empty_dept_cache: None) -> None:
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
-        result = load_department_cached(dept)
+        result = load_department_cached("31")
     assert result is sample_df
-    mock_load.assert_called_once_with(dept)
-    dl._dept_cache.pop(dept, None)
-    dl._dept_cache_time.pop(dept, None)
+    mock_load.assert_called_once_with("31")
 
 
-def test_load_department_cached_reuses_cache(sample_df: pl.DataFrame) -> None:
-    import src.data_loader as dl
-
-    dept = "__test_dept2__"
-    dl._dept_cache.pop(dept, None)
-    dl._dept_cache_time.pop(dept, None)
+def test_load_department_cached_reuses_cache(sample_df: pl.DataFrame, empty_dept_cache: None) -> None:
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
-        load_department_cached(dept)
-        load_department_cached(dept)
+        load_department_cached("31")
+        load_department_cached("31")
     mock_load.assert_called_once()
-    dl._dept_cache.pop(dept, None)
-    dl._dept_cache_time.pop(dept, None)
 
 
-def test_load_department_cached_refreshes_after_ttl(sample_df: pl.DataFrame) -> None:
+def test_load_department_cached_refreshes_after_ttl(sample_df: pl.DataFrame, empty_dept_cache: None) -> None:
     import src.data_loader as dl
 
-    dept = "__test_ttl__"
-    dl._dept_cache.pop(dept, None)
-    dl._dept_cache_time.pop(dept, None)
     with patch("src.data_loader.load_department", return_value=sample_df) as mock_load:
-        load_department_cached(dept)
-        dl._dept_cache_time[dept] = time.time() - dl._LATEST_TTL_SECONDS - 1
-        load_department_cached(dept)
+        load_department_cached("31")
+        dl._dept_cache["31"] = dl._CacheEntry(sample_df, time.time() - dl._LATEST_TTL_SECONDS - 1)
+        load_department_cached("31")
     assert mock_load.call_count == 2
-    dl._dept_cache.pop(dept, None)
-    dl._dept_cache_time.pop(dept, None)
+
+
+def test_load_department_cached_evicts_the_least_recently_used(sample_df: pl.DataFrame, empty_dept_cache: None) -> None:
+    import src.data_loader as dl
+
+    depts = [str(i) for i in range(dl.MAX_CACHED_DEPTS + 1)]
+    with patch("src.data_loader.load_department", return_value=sample_df):
+        for dept in depts:
+            load_department_cached(dept)
+    assert len(dl._dept_cache) == dl.MAX_CACHED_DEPTS
+    assert depts[0] not in dl._dept_cache
+    assert depts[-1] in dl._dept_cache
+
+
+def test_load_department_cached_keeps_the_department_being_used(
+    sample_df: pl.DataFrame, empty_dept_cache: None
+) -> None:
+    import src.data_loader as dl
+
+    with patch("src.data_loader.load_department", return_value=sample_df):
+        for dept in (str(i) for i in range(dl.MAX_CACHED_DEPTS)):
+            load_department_cached(dept)
+        load_department_cached("0")  # touched again - must survive the next eviction
+        load_department_cached("fresh")
+    assert "0" in dl._dept_cache
+    assert "1" not in dl._dept_cache
+
+
+def test_clear_cache_drops_the_in_process_entries(
+    sample_df: pl.DataFrame, empty_dept_cache: None, tmp_path: Path
+) -> None:
+    import src.data_loader as dl
+
+    with patch("src.data_loader.load_department", return_value=sample_df):
+        load_department_cached("31")
+    with patch.object(dl, "CACHE_DIR", tmp_path):
+        clear_cache()
+    assert len(dl._dept_cache) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -441,3 +505,101 @@ def test_download_returns_none_when_url_unknown() -> None:
         result = _download("99", Period.LATEST)
     mock_get.assert_not_called()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# packaged-app paths
+# ---------------------------------------------------------------------------
+
+
+def test_default_cache_dir_honours_the_environment_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An installed app must not write downloads next to its own binary."""
+    monkeypatch.setenv("OMW_CACHE_DIR", r"C:\somewhere\else")
+    assert _default_cache_dir() == Path(r"C:\somewhere\else")
+
+
+def test_default_cache_dir_falls_back_to_the_checkout(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OMW_CACHE_DIR", raising=False)
+    assert _default_cache_dir().name == "cache"
+
+
+def test_bundle_dir_follows_the_pyinstaller_unpack_directory(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "_MEIPASS", r"C:\bundle", raising=False)
+    assert _bundle_dir() == Path(r"C:\bundle")
+
+
+def test_bundle_dir_is_the_repository_when_not_frozen(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    assert (_bundle_dir() / "data").exists()
+
+
+# ---------------------------------------------------------------------------
+# station_index
+# ---------------------------------------------------------------------------
+
+
+def test_station_index_reads_the_committed_file() -> None:
+    station_index.cache_clear()
+    index = station_index()
+    assert index
+    assert all(isinstance(s, IndexedStation) for s in index)
+    assert all(s.dept and s.name for s in index)
+
+
+_INDEX_ENTRY: dict[str, Any] = {
+    "station_id": 31001,
+    "station_name": "TOULOUSE",
+    "dept": "31",
+    "lat": 43.6,
+    "lon": 1.44,
+    "altitude": 152,
+}
+
+
+def _write_index(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entries: list[Any]) -> None:
+    (tmp_path / "stations.json").write_text(json.dumps(entries), encoding="utf-8")
+    monkeypatch.setattr(dl, "DATA_DIR", tmp_path)
+    station_index.cache_clear()
+
+
+def test_record_span_counts_both_end_years() -> None:
+    assert RecordSpan(first_year=1950, last_year=1950).n_years == 1
+    assert RecordSpan(first_year=1950, last_year=2025).n_years == 76
+
+
+def test_station_index_reads_a_span_when_the_entry_carries_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _write_index(monkeypatch, tmp_path, [{**_INDEX_ENTRY, "first_year": 1950, "last_year": 2025}])
+    (station,) = station_index()
+    assert station.span == RecordSpan(1950, 2025)
+
+
+def test_station_index_leaves_the_span_absent_when_the_entry_omits_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`build_station_index.py --fast` writes positions only — a station with no span, not a bad one."""
+    _write_index(monkeypatch, tmp_path, [_INDEX_ENTRY])
+    (station,) = station_index()
+    assert station.span is None
+
+
+def test_record_span_cannot_end_before_it_starts() -> None:
+    with pytest.raises(ValueError):
+        RecordSpan(first_year=2025, last_year=1950)
+
+
+def test_station_index_drops_a_malformed_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bad: list[Any] = [
+        "not an object",
+        {"station_id": 31001},
+        {**_INDEX_ENTRY, "lat": "north"},
+        {**_INDEX_ENTRY, "first_year": 2025, "last_year": 1950},
+    ]
+    _write_index(monkeypatch, tmp_path, [*bad, _INDEX_ENTRY])
+    assert [s.station_id for s in station_index()] == [31001]
+
+
+def test_station_index_is_empty_when_it_has_not_been_built(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    station_index.cache_clear()
+    monkeypatch.setattr(dl, "DATA_DIR", tmp_path)
+    assert station_index() == []
+    station_index.cache_clear()

@@ -1,23 +1,32 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import plotly.graph_objects as go
 import pytest
 from dash import dcc, html
 from dash.exceptions import PreventUpdate
 
+import src.pages.components as components
 import src.pages.map_page as map_page
+from src.data_loader import IndexedStation, RecordSpan
 from src.pages.map_page import _map_figure, layout, on_map_click
+from tests.conftest import find_component
 
 _SAMPLE_STATIONS = [
-    {"station_id": 31001, "station_name": "TOULOUSE", "dept": "31", "lat": 43.6, "lon": 1.44, "altitude": 152},
-    {"station_id": 31002, "station_name": "BLAGNAC", "dept": "31", "lat": 43.63, "lon": 1.37, "altitude": 151},
+    IndexedStation(31001, "TOULOUSE", "31", 43.6, 1.44, 152, span=None),
+    IndexedStation(31002, "BLAGNAC", "31", 43.63, 1.37, 151, span=None),
+]
+
+_SPANNED_STATIONS = [
+    replace(s, span=RecordSpan(first_year=1950 + i, last_year=2025)) for i, s in enumerate(_SAMPLE_STATIONS)
 ]
 
 
 @pytest.fixture(autouse=True)
 def patch_stations(monkeypatch: pytest.MonkeyPatch) -> None:
-    map_page._load_stations.cache_clear()
-    monkeypatch.setattr(map_page, "_load_stations", lambda: _SAMPLE_STATIONS)
+    monkeypatch.setattr(map_page, "station_index", lambda: _SAMPLE_STATIONS)
+    monkeypatch.setattr(components, "station_index", lambda: _SAMPLE_STATIONS)
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +55,7 @@ def test_map_figure_customdata_contains_dept_and_station_id() -> None:
 
 
 def test_map_figure_no_stations_returns_annotation(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(map_page, "_load_stations", lambda: [])
+    monkeypatch.setattr(map_page, "station_index", lambda: [])
     fig = _map_figure()
     assert len(fig.data) == 0
     assert len(fig.layout.annotations) == 1
@@ -63,16 +72,34 @@ def test_layout_returns_div() -> None:
 
 
 def test_layout_contains_graph() -> None:
-    result = layout()
-    graphs = [c for c in result.children if isinstance(c, dcc.Graph)]
-    assert len(graphs) == 1
-    assert graphs[0].id == "station-map"
+    graph = find_component(layout(), dcc.Graph)
+    assert graph is not None
+    assert graph.id == "station-map"
 
 
 def test_layout_graph_has_scroll_zoom() -> None:
-    result = layout()
-    graph = next(c for c in result.children if isinstance(c, dcc.Graph))
+    graph = find_component(layout(), dcc.Graph)
+    assert graph is not None
     assert graph.config.get("scrollZoom") is True
+
+
+def test_layout_offers_a_station_search() -> None:
+    search = find_component(layout(), dcc.Dropdown)
+    assert search is not None
+    assert search.id == "station-search"
+    assert search.options[0]["value"] == "/station?dept=31&station=31001"
+
+
+def test_map_figure_colours_by_record_length_when_the_index_has_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(map_page, "station_index", lambda: _SPANNED_STATIONS)
+    marker = _map_figure().data[0].marker
+    assert list(marker.color) == [76, 75]
+    assert marker.colorscale is not None
+
+
+def test_map_figure_falls_back_to_one_colour_without_record_length() -> None:
+    marker = _map_figure().data[0].marker
+    assert isinstance(marker.color, str)
 
 
 # ---------------------------------------------------------------------------

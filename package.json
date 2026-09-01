@@ -1,12 +1,54 @@
 {
   "name": "outside-my-window",
   "version": "0.1.0",
-  "description": "Outside My Window — Météo France weather visualization",
+  "description": "Outside My Window — Météo-France weather visualization",
   "main": "electron/main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "build:server": "uv run pyinstaller --noconfirm --distpath sidecar --workpath build/pyinstaller server.spec",
+    "dist": "npm run build:server && electron-builder",
+    "dist:dir": "npm run build:server && electron-builder --dir"
   },
   "devDependencies": {
-    "electron": "^42.5.0"
+    "electron": "^42.5.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "info.huard.outside-my-window",
+    "productName": "Outside My Window",
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "sidecar/omw-server",
+        "to": "server"
+      }
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.weather"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Science"
+    }
   }
 }

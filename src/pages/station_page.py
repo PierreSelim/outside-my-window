@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import datetime
-from datetime import date as _date
+from datetime import date
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -18,6 +17,7 @@ from src.charts import (
     precipitation_figure,
     temperature_figure,
     wind_figure,
+    yearly_series,
 )
 from src.data_loader import (
     Granularity,
@@ -28,17 +28,27 @@ from src.data_loader import (
     stations_from,
 )
 from src.departments import DEPT_NAMES
+from src.pages.components import station_search
 from src.transforms import (
     DEFAULT_HOT_DAY,
     DEFAULT_WINDOW,
     HOT_DAY_OPTIONS,
+    DatedValue,
     DayWindow,
     Distribution,
+    LatestVsNormal,
     LinearTrend,
+    StationRecords,
+    Streak,
     YearSpan,
+    decades_in,
     describe,
+    has_wind,
     hot_day_from,
+    is_complete,
+    latest_vs_normal,
     linear_trend,
+    station_records,
     window_filter,
     year_filter,
     yearly_hot_cold,
@@ -49,18 +59,119 @@ _COMPARISON_SPAN: int = 30
 _NO_DATA = "No data available"
 _COMPARISON_TAB = "comparison"
 _FALLBACK_YEARS: YearSpan = YearSpan(1950, 2026)
+_DECADES_SHOWN: int = 3
 # ponytail: DatePickerRange needs a year; 2000 is a leap year so 29 Feb stays selectable.
 # Only month/day are read back -- see DayWindow.from_dates.
 _WINDOW_REF_YEAR: int = 2000
+_MAX_SLIDER_MARKS: int = 8
+_SLIDER_MARK_STEPS: tuple[int, ...] = (10, 20, 25, 50, 100)
 _CELL: dict[str, str] = {"paddingRight": "1.5rem"}
 
 
 def _chart_card(graph_id: str) -> html.Div:
+    """Each chart carries its own loading state — the page-level one leaves stale charts on screen."""
     return html.Div(
+        id=f"{graph_id}-card",
         className="card card--flush",
         children=[
-            dcc.Graph(id=graph_id, config={"displayModeBar": False}),
+            dcc.Loading(
+                type="circle",
+                delay_show=250,
+                children=dcc.Graph(id=graph_id, config={"displayModeBar": False}),
+            ),
         ],
+    )
+
+
+def _stat_tile(label: str, value: str, detail: str = "", tone: str = "") -> html.Div:
+    return html.Div(
+        className=f"stat-tile {tone}".strip(),
+        children=[
+            html.Span(label, className="stat-label"),
+            html.Span(value, className="stat-value"),
+            html.Span(detail, className="stat-detail"),
+        ],
+    )
+
+
+def _signed(value: float | None, unit: str = "°C") -> str:
+    return "—" if value is None else f"{value:+.1f} {unit}"
+
+
+def _tone(value: float | None) -> str:
+    if value is None:
+        return ""
+    return "stat-tile--warm" if value >= 0 else "stat-tile--cool"
+
+
+def _ordinal(n: int) -> str:
+    suffix = "th" if 11 <= n % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+def _degrees(value: float | None) -> str:
+    return "—" if value is None else f"{value:.1f} °C"
+
+
+def _usual_tile(delta: float | None, normal: float | None, what: str, span_label: str) -> html.Div:
+    """The anomaly, said in words: a reader should not have to know what "anomaly" means."""
+    if delta is None:
+        label, value = "Compared with usual", "—"
+    else:
+        label = "Warmer than usual" if delta >= 0 else "Colder than usual"
+        value = f"{abs(delta):.1f} °C"
+    detail = "no long-term average on record"
+    if normal is not None:
+        detail = f"usual {what} for this date {normal:.1f} °C ({span_label})"
+    return _stat_tile(label, value, detail, _tone(delta))
+
+
+def _latest_tiles(latest: LatestVsNormal) -> list[html.Div]:
+    """The station's most recent day, read against the normal for that calendar day.
+
+    This is the only place in the app that answers "what is it doing now, and is that unusual" —
+    the question the daily-refreshed LATEST period exists to serve.
+    """
+    obs, normal = latest.observation, latest.normal
+    day_label = obs.when.strftime("%d %b %Y")
+    tiles = [
+        _stat_tile("Daytime high", _degrees(obs.temp_max), day_label),
+        _usual_tile(latest.anomaly_max, normal.temp_max, "high", normal.span.label),
+        _stat_tile("Overnight low", _degrees(obs.temp_min), day_label),
+        _usual_tile(latest.anomaly_min, normal.temp_min, "low", normal.span.label),
+    ]
+    if latest.rank is not None:
+        tiles.append(
+            _stat_tile(
+                f"Rank for {obs.when.strftime('%d %b')}",
+                f"{_ordinal(latest.rank.rank)} warmest",
+                f"of the {latest.rank.of} years this date was recorded",
+            )
+        )
+    return tiles
+
+
+def _dated(value: DatedValue | None, unit: str) -> str:
+    return "—" if value is None else f"{value.value:.1f} {unit} · {value.when.strftime('%d %b %Y')}"
+
+
+def _streak(streak: Streak | None) -> str:
+    if streak is None:
+        return "—"
+    return f"{streak.days} days · {streak.start.strftime('%d %b')} – {streak.end.strftime('%d %b %Y')}"
+
+
+def _records_table(records: StationRecords, definition_label: str) -> html.Table:
+    rows = [
+        ("Hottest day", _dated(records.hottest_day, "°C")),
+        ("Coldest night", _dated(records.coldest_night, "°C")),
+        ("Wettest day", _dated(records.wettest_day, "mm")),
+        ("Strongest gust", _dated(records.strongest_gust, "m/s")),
+        (f"Longest run of {definition_label}", _streak(records.longest_hot_streak)),
+    ]
+    return html.Table(
+        html.Tbody([html.Tr([html.Td(name, style=_CELL), html.Td(value)]) for name, value in rows]),
+        className="records-table",
     )
 
 
@@ -68,9 +179,26 @@ def _record_years(df: pl.DataFrame | None) -> YearSpan:
     """First and last year covered by a DataFrame, or a sane span when there is no data."""
     first = df["DATE"].min() if df is not None else None
     last = df["DATE"].max() if df is not None else None
-    if isinstance(first, _date) and isinstance(last, _date):
+    if isinstance(first, date) and isinstance(last, date):
         return YearSpan.of(first.year, last.year)
     return _FALLBACK_YEARS
+
+
+def _mark_years(record: YearSpan, step: int) -> range:
+    """Round years inside the record at `step` intervals, starting on the first multiple of `step`."""
+    return range(record.start + (-record.start) % step, record.end + 1, step)
+
+
+def _year_marks(record: YearSpan) -> dict[int, str]:
+    """Decade marks thinned until they fit: 22 four-digit labels in one row is an unreadable smear."""
+    step = next(
+        (s for s in _SLIDER_MARK_STEPS if len(_mark_years(record, s)) <= _MAX_SLIDER_MARKS),
+        _SLIDER_MARK_STEPS[-1],
+    )
+    return {y: str(y) for y in _mark_years(record, step)} or {
+        record.start: str(record.start),
+        record.end: str(record.end),
+    }
 
 
 def _year_input(component_id: str, value: int, record: YearSpan) -> dcc.Input:
@@ -120,7 +248,7 @@ def layout(search: str = "") -> html.Div:
 
     record = _record_years(df)
     year_min, year_max = record.start, record.end
-    marks = {y: str(y) for y in range(year_min, year_max + 1, 10)}
+    marks = _year_marks(record)
 
     valid_ids = {s.station_id for s in stations}
     if initial_station not in valid_ids:
@@ -140,9 +268,11 @@ def layout(search: str = "") -> html.Div:
                     dcc.Link("← Back to map", href="/", className="back-link"),
                     html.Span("·", className="page-nav-sep"),
                     html.Span(dept_label, className="page-nav-dept"),
+                    html.Div(station_search("Jump to any station in France…"), className="page-nav-search"),
                 ],
             ),
             dcc.Store(id="dept-store", data=dept),
+            dcc.Loading(type="circle", delay_show=250, children=html.Div(id="station-header")),
             html.Div(
                 className="card",
                 children=[
@@ -173,7 +303,19 @@ def layout(search: str = "") -> html.Div:
                                         step=1,
                                         value=[max(year_min, year_max - _DEFAULT_YEAR_WINDOW), year_max],
                                         marks=marks,
-                                        tooltip={"placement": "bottom", "always_visible": True},
+                                        tooltip={"placement": "top", "always_visible": True},
+                                    ),
+                                ],
+                            ),
+                            html.Div(
+                                className="control-group control-group--definition",
+                                children=[
+                                    html.Label("Hot day", className="control-label"),
+                                    dcc.Dropdown(
+                                        id="hot-day-definition",
+                                        options=[{"label": d.label, "value": d.label} for d in HOT_DAY_OPTIONS],
+                                        value=DEFAULT_HOT_DAY.label,
+                                        clearable=False,
                                     ),
                                 ],
                             ),
@@ -183,9 +325,58 @@ def layout(search: str = "") -> html.Div:
             ),
             dcc.Tabs(
                 id="station-tabs",
-                value="observations",
+                value=_COMPARISON_TAB,
                 className="station-tabs",
                 children=[
+                    dcc.Tab(
+                        label="Then vs now",
+                        value=_COMPARISON_TAB,
+                        className="station-tab station-tab--feature",
+                        selected_className="station-tab station-tab--feature station-tab--selected",
+                        style={},
+                        selected_style={},
+                        children=[
+                            html.Div(
+                                className="card",
+                                children=[
+                                    html.Div(
+                                        className="controls-row",
+                                        children=[
+                                            html.Div(
+                                                className="control-group",
+                                                children=[
+                                                    html.Label("Season window (shared)", className="control-label"),
+                                                    dcc.DatePickerRange(
+                                                        id="cmp-window",
+                                                        display_format="DD MMM",
+                                                        min_date_allowed=date(_WINDOW_REF_YEAR, 1, 1).isoformat(),
+                                                        max_date_allowed=date(_WINDOW_REF_YEAR, 12, 31).isoformat(),
+                                                        start_date=date(_WINDOW_REF_YEAR, 6, 1).isoformat(),
+                                                        end_date=date(_WINDOW_REF_YEAR, 8, 31).isoformat(),
+                                                    ),
+                                                ],
+                                            ),
+                                            _period_group("Period A", "cmp-a", span_a, record),
+                                            _period_group("Period B", "cmp-b", span_b, record),
+                                            html.Span(
+                                                f"Record: {year_min}–{year_max}",
+                                                className="control-hint",
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                            html.Div(id="cmp-headline"),
+                            html.Div(
+                                className="chart-pair",
+                                children=[
+                                    _chart_card("chart-density-tmax"),
+                                    _chart_card("chart-density-tmin"),
+                                ],
+                            ),
+                            html.Div(id="cmp-stats"),
+                        ],
+                    ),
                     dcc.Tab(
                         label="Observations",
                         value="observations",
@@ -243,21 +434,6 @@ def layout(search: str = "") -> html.Div:
                                             html.Div(
                                                 className="control-group",
                                                 children=[
-                                                    html.Label("Hot day definition", className="control-label"),
-                                                    dcc.Dropdown(
-                                                        id="hot-day-definition",
-                                                        options=[
-                                                            {"label": d.label, "value": d.label}
-                                                            for d in HOT_DAY_OPTIONS
-                                                        ],
-                                                        value=DEFAULT_HOT_DAY.label,
-                                                        clearable=False,
-                                                    ),
-                                                ],
-                                            ),
-                                            html.Div(
-                                                className="control-group",
-                                                children=[
                                                     dcc.Checklist(
                                                         id="yearly-trend-toggle",
                                                         options=[{"label": "  Show tendency lines", "value": "show"}],
@@ -265,6 +441,11 @@ def layout(search: str = "") -> html.Div:
                                                         inline=True,
                                                     ),
                                                 ],
+                                            ),
+                                            html.Span(
+                                                "Years with under 90 % of days observed are excluded — "
+                                                "an offline station is not a cool year.",
+                                                className="control-hint",
                                             ),
                                         ],
                                     ),
@@ -283,17 +464,6 @@ def layout(search: str = "") -> html.Div:
                         selected_style={},
                         children=[
                             _chart_card("chart-monthly-avg-temp"),
-                            _chart_card("chart-monthly-avg-temp-decade"),
-                        ],
-                    ),
-                    dcc.Tab(
-                        label="Then vs now",
-                        value=_COMPARISON_TAB,
-                        className="station-tab station-tab--feature",
-                        selected_className="station-tab station-tab--feature station-tab--selected",
-                        style={},
-                        selected_style={},
-                        children=[
                             html.Div(
                                 className="card",
                                 children=[
@@ -301,32 +471,23 @@ def layout(search: str = "") -> html.Div:
                                         className="controls-row",
                                         children=[
                                             html.Div(
-                                                className="control-group",
+                                                className="control-group control-group--decades",
                                                 children=[
-                                                    html.Label("Season window (shared)", className="control-label"),
-                                                    dcc.DatePickerRange(
-                                                        id="cmp-window",
-                                                        display_format="DD MMM",
-                                                        min_date_allowed=_date(_WINDOW_REF_YEAR, 1, 1).isoformat(),
-                                                        max_date_allowed=_date(_WINDOW_REF_YEAR, 12, 31).isoformat(),
-                                                        start_date=_date(_WINDOW_REF_YEAR, 6, 1).isoformat(),
-                                                        end_date=_date(_WINDOW_REF_YEAR, 8, 31).isoformat(),
+                                                    html.Label("Decades compared", className="control-label"),
+                                                    dcc.Dropdown(
+                                                        id="decade-select",
+                                                        options=[],
+                                                        value=[],
+                                                        multi=True,
+                                                        placeholder="All decades in range",
                                                     ),
                                                 ],
-                                            ),
-                                            _period_group("Period A", "cmp-a", span_a, record),
-                                            _period_group("Period B", "cmp-b", span_b, record),
-                                            html.Span(
-                                                f"Record: {year_min}–{year_max}",
-                                                className="control-hint",
                                             ),
                                         ],
                                     ),
                                 ],
                             ),
-                            _chart_card("chart-density-tmax"),
-                            _chart_card("chart-density-tmin"),
-                            html.Div(id="cmp-stats"),
+                            _chart_card("chart-monthly-avg-temp-decade"),
                         ],
                     ),
                 ],
@@ -355,24 +516,58 @@ def _filtered_station_df(station_id: int | None, year_range: list[int], dept: st
     return df if not df.is_empty() else None
 
 
+def update_station_header(station_id: int | None, dept: str | None, definition_label: str) -> list[Any]:
+    """The card above the tabs: what the station is doing now, and its all-time extremes.
+
+    Independent of the year range — a record is a record whatever window the charts are showing.
+    """
+    df = _station_df(station_id, dept)
+    if df is None:
+        return []
+    definition = hot_day_from(definition_label)
+    latest = latest_vs_normal(df)
+    record = _record_years(df)
+    summary = f"Record {record.label} · {df.height:,} days observed".replace(",", " ")
+    return [
+        html.Div(
+            className="card station-header",
+            children=[
+                html.Div(
+                    className="station-header-title",
+                    children=[
+                        html.Strong(df["station_name"][0]),
+                        html.Span(summary, className="station-header-summary"),
+                    ],
+                ),
+                html.Div(className="stat-row", children=_latest_tiles(latest) if latest is not None else []),
+                _records_table(station_records(df, definition), definition.label),
+            ],
+        )
+    ]
+
+
 def update_charts(
     station_id: int | None,
     year_range: list[int],
     dept: str | None,
     granularity_value: str,
-) -> tuple[go.Figure, go.Figure, go.Figure]:
+    definition_label: str = DEFAULT_HOT_DAY.label,
+) -> tuple[go.Figure, go.Figure, go.Figure, dict[str, str]]:
+    """Render the three observation charts, hiding the wind card for stations that measure no wind."""
     df = _filtered_station_df(station_id, year_range, dept)
     if df is None:
         placeholder = empty_figure(_NO_DATA)
-        return placeholder, placeholder, placeholder
+        return placeholder, placeholder, placeholder, {"display": "none"}
 
     granularity: Granularity = granularity_from(granularity_value)
+    windy = has_wind(df)
     df = aggregate(df, granularity)
     station_name = df["station_name"][0]
     return (
-        temperature_figure(df, station_name, granularity),
+        temperature_figure(df, station_name, granularity, hot_day_from(definition_label)),
         precipitation_figure(df, station_name, granularity),
-        wind_figure(df, station_name, granularity),
+        wind_figure(df, station_name, granularity) if windy else empty_figure(_NO_DATA),
+        {} if windy else {"display": "none"},
     )
 
 
@@ -393,7 +588,7 @@ def update_yearly_chart(
     if df is None:
         return empty_figure(_NO_DATA), []
 
-    current_year = datetime.date.today().year
+    current_year = date.today().year
     definition = hot_day_from(definition_label)
     show_trend = "show" in (trend_values or [])
     provisional = current_year if YearSpan.of(*year_range).end >= current_year else None
@@ -409,43 +604,62 @@ def update_yearly_chart(
     if not show_trend:
         return fig, []
 
-    df_complete = df.filter(pl.col("DATE").dt.year() < current_year)
-    if df_complete.is_empty():
-        return fig, []
-
-    agg = yearly_hot_cold(df_complete, definition)
+    # Same population as the chart's solid lines: complete years only, current year excluded.
+    agg = yearly_hot_cold(df, definition).filter(is_complete() & (pl.col("year") < current_year))
     years_f = [float(y) for y in agg["year"].to_list()]
     if len(years_f) < 2:
         return fig, []
 
-    rows = []
-    for label, col in [("Hot days", "hot_days"), ("Cold days", "cold_days")]:
-        trend: LinearTrend = linear_trend(years_f, agg[col].to_list())
-        sign = "+" if trend.slope >= 0 else "−"
-        rows.append(
-            html.Tr(
-                [
-                    html.Td(label, style={"paddingRight": "1.5rem"}),
-                    html.Td(f"{sign}{abs(trend.slope):.2f} days/yr", style={"paddingRight": "1.5rem"}),
-                    html.Td(f"R² = {trend.r_squared:.2f}"),
-                ]
-            )
+    trends = ((s.label, linear_trend(years_f, agg[s.column].to_list())) for s in yearly_series(definition))
+    rows = [
+        html.Tr(
+            [
+                html.Td(label, style=_CELL),
+                html.Td(_slope_label(trend), style=_CELL),
+                html.Td(f"R² = {trend.r_squared:.2f}"),
+            ]
         )
+        for label, trend in trends
+        if trend is not None
+    ]
 
     stats_card = html.Div(
         className="card",
         children=[
-            html.Strong("Tendency lines — "),
-            html.Table(html.Tbody(rows), style={"display": "inline-table", "marginLeft": "0.5rem"}),
+            html.Strong(f"Tendency over {len(years_f)} fully observed years"),
+            html.Table(html.Tbody(rows), style={"marginTop": "0.35rem"}),
         ],
     )
     return fig, [stats_card]
+
+
+def _slope_label(trend: LinearTrend) -> str:
+    sign = "+" if trend.slope >= 0 else "−"
+    return f"{sign}{abs(trend.slope):.2f} days/yr ({sign}{abs(trend.slope) * 10:.1f} per decade)"
+
+
+def update_decade_options(
+    station_id: int | None,
+    year_range: list[int],
+    dept: str | None,
+) -> tuple[list[dict[str, Any]], list[int]]:
+    """Offer the decades the current range covers, pre-selecting the oldest, middle and newest.
+
+    Drawing every decade at once is what made this chart a legend with a plot attached.
+    """
+    df = _filtered_station_df(station_id, year_range, dept)
+    decades = decades_in(df) if df is not None else []
+    options = [{"label": f"{d}s", "value": d} for d in decades]
+    if len(decades) <= _DECADES_SHOWN:
+        return options, decades
+    return options, [decades[0], decades[len(decades) // 2], decades[-1]]
 
 
 def update_monthly_charts(
     station_id: int | None,
     year_range: list[int],
     dept: str | None,
+    decades: list[int] | None = None,
 ) -> tuple[go.Figure, go.Figure]:
     """Render the two monthly average temperature charts."""
     df = _filtered_station_df(station_id, year_range, dept)
@@ -455,14 +669,14 @@ def update_monthly_charts(
     station_name = df["station_name"][0]
     return (
         monthly_avg_temp_figure(df, station_name),
-        monthly_avg_temp_by_decade_figure(df, station_name),
+        monthly_avg_temp_by_decade_figure(df, station_name, decades or None),
     )
 
 
 def _window_from(start_date: str | None, end_date: str | None) -> DayWindow:
     if not start_date or not end_date:
         return DEFAULT_WINDOW
-    return DayWindow.from_dates(_date.fromisoformat(start_date[:10]), _date.fromisoformat(end_date[:10]))
+    return DayWindow.from_dates(date.fromisoformat(start_date[:10]), date.fromisoformat(end_date[:10]))
 
 
 def _typed_span(start: int | None, end: int | None, fallback: YearSpan) -> YearSpan:
@@ -476,13 +690,44 @@ def _typed_span(start: int | None, end: int | None, fallback: YearSpan) -> YearS
 def _describe_cell(dist: Distribution | None) -> str:
     if dist is None:
         return "no data"
-    return f"n={dist.n} \u00b7 mean {dist.mean:.1f} \u00b7 median {dist.median:.1f} \u00b7 p90 {dist.p90:.1f} \u00b0C"
+    return (
+        f"{dist.n} days \u00b7 average {dist.mean:.1f} \u00b7 median {dist.median:.1f} "
+        f"\u00b7 warmest tenth above {dist.p90:.1f} \u00b0C"
+    )
+
+
+def _headline(
+    rows: list[tuple[str, Distribution | None, Distribution | None]],
+    label_a: str,
+    label_b: str,
+    overlapping: bool,
+) -> list[Any]:
+    """\u0394 mean and \u0394 p90 as tiles: the shift is the answer this tab exists for, not a table cell."""
+    tiles: list[html.Div] = []
+    for name, a, b in rows:
+        if a is None or b is None:
+            continue
+        delta_mean, delta_p90 = b.mean - a.mean, b.p90 - a.p90
+        shift = f"{label_a} \u2192 {label_b}"
+        tiles.append(_stat_tile(f"Average {name.lower()}", _signed(delta_mean), shift, _tone(delta_mean)))
+        tiles.append(_stat_tile(f"Warmest tenth of {name.lower()}", _signed(delta_p90), shift, _tone(delta_p90)))
+    if not tiles:
+        return []
+    children: list[Any] = [html.Div(className="stat-row", children=tiles)]
+    if overlapping:
+        children.append(
+            html.Span(
+                "The two periods overlap \u2014 part of the same years is being compared with itself.",
+                className="control-hint control-hint--warning",
+            )
+        )
+    return [html.Div(className="card", children=children)]
 
 
 def _delta_cell(a: Distribution | None, b: Distribution | None) -> str:
     if a is None or b is None:
         return "\u2014"
-    return f"\u0394 mean {b.mean - a.mean:+.1f} \u00b7 \u0394 p90 {b.p90 - a.p90:+.1f} \u00b0C"
+    return f"average {b.mean - a.mean:+.1f} \u00b7 warmest tenth {b.p90 - a.p90:+.1f} \u00b0C"
 
 
 def _stats_card(
@@ -525,12 +770,12 @@ def update_comparison_charts(
     b_end: int | None,
     start_date: str | None,
     end_date: str | None,
-) -> tuple[go.Figure, go.Figure, list[Any]]:
+) -> tuple[go.Figure, go.Figure, list[Any], list[Any]]:
     """Overlay the Tmax and Tmin densities of two year ranges over a shared calendar window."""
     df = _station_df(station_id, dept)
     if df is None:
         placeholder = empty_figure(_NO_DATA)
-        return placeholder, placeholder, []
+        return placeholder, placeholder, [], []
 
     record = _record_years(df)
     span_a = _typed_span(a_start, a_end, record)
@@ -551,9 +796,16 @@ def update_comparison_charts(
         )
 
     rows = [
-        (what, describe(df_a[col]), describe(df_b[col])) for what, col in (("Tmax", "temp_max"), ("Tmin", "temp_min"))
+        (what, describe(df_a[col]), describe(df_b[col]))
+        for what, col in (("Daytime highs", "temp_max"), ("Overnight lows", "temp_min"))
     ]
-    return figure("temp_max", "Daily Tmax"), figure("temp_min", "Daily Tmin"), _stats_card(rows, label_a, label_b)
+    overlapping = span_a.end >= span_b.start and span_b.end >= span_a.start
+    return (
+        figure("temp_max", "Daytime highs"),
+        figure("temp_min", "Overnight lows"),
+        _stats_card(rows, label_a, label_b),
+        _headline(rows, label_a, label_b, overlapping),
+    )
 
 
 def year_slider_style(tab: str | None) -> dict[str, str]:
@@ -568,13 +820,22 @@ def register_callbacks(app: Dash) -> None:
     )(year_slider_style)
 
     app.callback(
+        Output("station-header", "children"),
+        Input("station-dropdown", "value"),
+        State("dept-store", "data"),
+        Input("hot-day-definition", "value"),
+    )(update_station_header)
+
+    app.callback(
         Output("chart-temperature", "figure"),
         Output("chart-precipitation", "figure"),
         Output("chart-wind", "figure"),
+        Output("chart-wind-card", "style"),
         Input("station-dropdown", "value"),
         Input("year-slider", "value"),
         State("dept-store", "data"),
         Input("granularity-radio", "value"),
+        Input("hot-day-definition", "value"),
     )(update_charts)
 
     app.callback(
@@ -588,17 +849,27 @@ def register_callbacks(app: Dash) -> None:
     )(update_yearly_chart)
 
     app.callback(
+        Output("decade-select", "options"),
+        Output("decade-select", "value"),
+        Input("station-dropdown", "value"),
+        Input("year-slider", "value"),
+        State("dept-store", "data"),
+    )(update_decade_options)
+
+    app.callback(
         Output("chart-monthly-avg-temp", "figure"),
         Output("chart-monthly-avg-temp-decade", "figure"),
         Input("station-dropdown", "value"),
         Input("year-slider", "value"),
         State("dept-store", "data"),
+        Input("decade-select", "value"),
     )(update_monthly_charts)
 
     app.callback(
         Output("chart-density-tmax", "figure"),
         Output("chart-density-tmin", "figure"),
         Output("cmp-stats", "children"),
+        Output("cmp-headline", "children"),
         Input("station-dropdown", "value"),
         State("dept-store", "data"),
         Input("cmp-a-start", "value"),

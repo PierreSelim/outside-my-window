@@ -1,25 +1,46 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from enum import Enum, StrEnum
+from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 import requests
+
+
+def _bundle_dir() -> Path:
+    """Root holding the read-only `data/` directory: the PyInstaller bundle when frozen, else the repo."""
+    meipass = getattr(sys, "_MEIPASS", None)
+    return Path(meipass) if meipass else Path(__file__).parent.parent
+
+
+def _default_cache_dir() -> Path:
+    """Downloads live beside the code in a checkout, and in a writable per-user directory when packaged."""
+    override = os.environ.get("OMW_CACHE_DIR")
+    if override:
+        return Path(override)
+    return _bundle_dir() / "data" / "cache"
+
 
 # Stable data.gouv.fr permalink: redirects to whatever storage host is live, so a
 # host migration never breaks us. Rebuild data/resources.json with
 # scripts/build_resource_index.py if the dataset re-issues resources with new ids.
 DATAGOUV_RESOURCE_URL = "https://www.data.gouv.fr/api/1/datasets/r"
-CACHE_DIR = Path(__file__).parent.parent / "data" / "cache"
+BUNDLE_DIR = _bundle_dir()
+DATA_DIR = BUNDLE_DIR / "data"
+ASSETS_DIR = BUNDLE_DIR / "assets"
+CACHE_DIR = _default_cache_dir()
 
 # (dept, period.value) → data.gouv.fr resource-id, built by scripts/build_resource_index.py
-_RESOURCE_INDEX: dict[str, dict[str, str]] = json.loads(
-    (Path(__file__).parent.parent / "data" / "resources.json").read_text(encoding="utf-8")
-)
+_RESOURCE_INDEX: dict[str, dict[str, str]] = json.loads((DATA_DIR / "resources.json").read_text(encoding="utf-8"))
 
 # Columns we actually need for visualisation — the raw files have 60 columns
 KEEP_COLS: list[str] = [
@@ -32,13 +53,14 @@ KEEP_COLS: list[str] = [
     "RR",
     "TN",
     "TX",
-    "TAMPLI",
     "FFM",
     "FXY",
 ]
 
-# Raw column names and their target types in _parse
-_PARSE_FLOAT_COLS: list[str] = ["LAT", "LON", "RR", "TN", "TX", "TAMPLI", "FFM", "FXY"]
+# Coordinates stay Float64; measurements are reported to 0.1 and a department is ~1.5 M rows,
+# so Float32 halves the resident size of a cached department at no readable precision cost.
+_PARSE_COORD_COLS: list[str] = ["LAT", "LON"]
+_PARSE_MEASURE_COLS: list[str] = ["RR", "TN", "TX", "FFM", "FXY"]
 _PARSE_INT_COLS: list[str] = ["NUM_POSTE", "ALTI"]
 
 # Mapping from raw dataset column names to human-readable equivalents
@@ -50,7 +72,6 @@ COLUMN_RENAME: dict[str, str] = {
     "ALTI": "altitude",
     "TN": "temp_min",
     "TX": "temp_max",
-    "TAMPLI": "temp_amplitude",
     "RR": "precipitation",
     "FFM": "wind_mean",
     "FXY": "wind_gust",
@@ -69,39 +90,43 @@ class Period(StrEnum):
 
 @dataclass(frozen=True)
 class Truncated:
-    """Configuration for a coarser-than-daily granularity.
+    """Configuration for one granularity, the value type of the Granularity members.
 
-    Used as the value type for Granularity enum members. Callers should
-    interact with Granularity directly rather than constructing Truncated instances.
+    `truncate_expr` is None for the identity granularity: there is no Polars truncation string
+    that means "leave the daily rows alone". Callers use Granularity, not this type.
     """
 
     label: str
-    truncate_expr: str
+    truncate_expr: str | None
     title_suffix: str
 
 
 class Granularity(Enum):
     """Granularity levels for time-series aggregation.
 
-    DAY is the identity — no truncation applied. WEEK and MONTH collapse
-    daily rows to coarser periods by averaging numeric columns.
+    DAY is the identity — no truncation applied. WEEK and MONTH collapse daily rows to coarser
+    periods, each measurement using the operation that preserves its meaning (see `aggregate`).
     """
 
-    DAY = Truncated("day", "", "")
-    WEEK = Truncated("week", "1w", " (weekly avg)")
-    MONTH = Truncated("month", "1mo", " (monthly avg)")
+    DAY = Truncated("day", None, "")
+    WEEK = Truncated("week", "1w", " (weekly)")
+    MONTH = Truncated("month", "1mo", " (monthly)")
 
     @property
     def label(self) -> str:
         return self.value.label
 
     @property
-    def truncate_expr(self) -> str:
+    def truncate_expr(self) -> str | None:
         return self.value.truncate_expr
 
     @property
     def title_suffix(self) -> str:
         return self.value.title_suffix
+
+    def per_unit(self, unit: str) -> str:
+        """Axis unit for a quantity that accumulates over the period: `mm` → `mm/month`."""
+        return unit if self is Granularity.DAY else f"{unit}/{self.label}"
 
 
 _GRANULARITY_BY_LABEL: dict[str, Granularity] = {g.label: g for g in Granularity}
@@ -124,20 +149,23 @@ class Station:
     altitude: int
 
 
-_NUMERIC_COLS: list[str] = [
-    "temp_min",
-    "temp_max",
-    "temp_amplitude",
-    "precipitation",
-    "wind_mean",
-    "wind_gust",
-]
 _META_COLS: list[str] = ["lat", "lon", "altitude"]
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
+def _total_or_null(col: str) -> pl.Expr:
+    """Sum, but an all-null group stays null: `sum()` alone reports 0 mm for a station that measures no rain."""
+    return pl.when(pl.col(col).is_not_null().any()).then(pl.col(col).sum()).otherwise(None).alias(col)
+
+
+# What a measurement means once a period is collapsed: a week of rain is a total, a week of
+# gusts is the strongest one, a week of temperatures is an average.
+_MEASUREMENT_AGGS: dict[str, pl.Expr] = {
+    "temp_min": pl.col("temp_min").mean(),
+    "temp_max": pl.col("temp_max").mean(),
+    "precipitation": _total_or_null("precipitation"),
+    "wind_mean": pl.col("wind_mean").mean(),
+    "wind_gust": pl.col("wind_gust").max(),
+}
 
 
 _LATEST_TTL_SECONDS: int = 6 * 3600
@@ -198,7 +226,8 @@ def _parse(path: Path) -> pl.DataFrame | None:
 
         available = [c for c in KEEP_COLS if c in df.columns]
         cast_exprs = (
-            [pl.col(c).cast(pl.Float64) for c in _PARSE_FLOAT_COLS if c in df.columns]
+            [pl.col(c).cast(pl.Float64) for c in _PARSE_COORD_COLS if c in df.columns]
+            + [pl.col(c).cast(pl.Float32) for c in _PARSE_MEASURE_COLS if c in df.columns]
             + [pl.col(c).cast(pl.Int32) for c in _PARSE_INT_COLS if c in df.columns]
             + [pl.col("AAAAMMJJ").cast(pl.String).str.to_date(format="%Y%m%d").alias("DATE")]
         )
@@ -208,26 +237,26 @@ def _parse(path: Path) -> pl.DataFrame | None:
         return None
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-
 def aggregate(df: pl.DataFrame, granularity: Granularity) -> pl.DataFrame:
-    """Resample a station DataFrame to weekly or monthly averages.
+    """Resample a station DataFrame to weekly or monthly values.
 
-    Granularity.DAY is the identity — returns df unchanged. For WEEK or MONTH,
-    each numeric measurement column is averaged; metadata columns keep their
-    first value (constant per station). Result is sorted by (station_id, DATE).
+    Granularity.DAY is the identity — returns df unchanged. For WEEK or MONTH, each measurement
+    column is collapsed with the operation that preserves its meaning (see `_MEASUREMENT_AGGS`):
+    temperatures average, precipitation totals, gusts take the period maximum. Metadata columns
+    keep their first value (constant per station). Result is sorted by (station_id, DATE).
+
+    ponytail: a period with missing days yields a proportionally understated precipitation total.
+    Surface per-period coverage if partial months turn out to mislead.
     """
-    if granularity == Granularity.DAY:
+    truncate_expr = granularity.truncate_expr
+    if truncate_expr is None:
         return df
 
-    numeric_aggs = [pl.col(c).mean() for c in _NUMERIC_COLS if c in df.columns]
+    numeric_aggs = [expr for col, expr in _MEASUREMENT_AGGS.items() if col in df.columns]
     meta_aggs = [pl.col(c).first() for c in _META_COLS if c in df.columns]
 
     return (
-        df.with_columns(pl.col("DATE").dt.truncate(granularity.truncate_expr))
+        df.with_columns(pl.col("DATE").dt.truncate(truncate_expr))
         .group_by(["station_id", "station_name", "DATE"])
         .agg(numeric_aggs + meta_aggs)
         .sort(["station_id", "DATE"])
@@ -255,31 +284,63 @@ def load_department(dept: str) -> pl.DataFrame | None:
     return pl.concat(frames, how="diagonal").sort(["station_id", "DATE"])
 
 
-_dept_cache: dict[str, pl.DataFrame | None] = {}
-_dept_cache_time: dict[str, float] = {}
+@dataclass(frozen=True)
+class _CacheEntry:
+    df: pl.DataFrame | None
+    loaded_at: float
+
+    def is_fresh(self, now: float) -> bool:
+        return now - self.loaded_at < _LATEST_TTL_SECONDS
+
+
+# A parsed department holds every station at daily resolution since 1809 — 100–165 MB each.
+# Browsing is local in practice, so keep the few most recent and let the rest be re-read from disk.
+MAX_CACHED_DEPTS: int = 3
+
+_dept_cache: OrderedDict[str, _CacheEntry] = OrderedDict()
 _dept_locks: dict[str, threading.Lock] = {}
-_dept_locks_lock = threading.Lock()
+# Guards the two dicts above. Held only for dict bookkeeping, never across a load — the long
+# work happens under the per-department lock so different departments still load in parallel.
+_registry_lock = threading.Lock()
+
+
+def _cached_entry(dept: str, now: float) -> _CacheEntry | None:
+    with _registry_lock:
+        entry = _dept_cache.get(dept)
+        if entry is None or not entry.is_fresh(now):
+            return None
+        _dept_cache.move_to_end(dept)
+        return entry
+
+
+def _store_entry(dept: str, entry: _CacheEntry) -> None:
+    with _registry_lock:
+        _dept_cache[dept] = entry
+        _dept_cache.move_to_end(dept)
+        while len(_dept_cache) > MAX_CACHED_DEPTS:
+            _dept_cache.popitem(last=False)
 
 
 def load_department_cached(dept: str) -> pl.DataFrame | None:
-    """Return a department DataFrame from an in-process cache, loading on first access.
+    """Return a department DataFrame from a bounded in-process cache, loading on first access.
 
-    Expires after _LATEST_TTL_SECONDS so that Period.LATEST data stays fresh.
-    Thread-safe: concurrent requests for different departments do not block each other;
-    concurrent requests for the same department wait on a per-key lock.
+    Holds at most MAX_CACHED_DEPTS departments, evicting least-recently-used; entries expire after
+    _LATEST_TTL_SECONDS so that Period.LATEST data stays fresh. Thread-safe: concurrent requests for
+    different departments do not block each other; concurrent requests for the same department wait
+    on a per-key lock.
     """
     now = time.time()
-    if dept in _dept_cache and now - _dept_cache_time.get(dept, 0.0) < _LATEST_TTL_SECONDS:
-        return _dept_cache[dept]
-    with _dept_locks_lock:
-        if dept not in _dept_locks:
-            _dept_locks[dept] = threading.Lock()
-        lock = _dept_locks[dept]
+    entry = _cached_entry(dept, now)
+    if entry is not None:
+        return entry.df
+    with _registry_lock:
+        lock = _dept_locks.setdefault(dept, threading.Lock())
     with lock:
-        if dept not in _dept_cache or now - _dept_cache_time.get(dept, 0.0) >= _LATEST_TTL_SECONDS:
-            _dept_cache[dept] = load_department(dept)
-            _dept_cache_time[dept] = now
-    return _dept_cache[dept]
+        entry = _cached_entry(dept, time.time())
+        if entry is None:
+            entry = _CacheEntry(load_department(dept), time.time())
+            _store_entry(dept, entry)
+    return entry.df
 
 
 def clear_cache() -> None:
@@ -288,10 +349,77 @@ def clear_cache() -> None:
     Drops the in-process cache and deletes disk-cached LATEST files, which would
     otherwise be served as-is for up to _LATEST_TTL_SECONDS.
     """
-    _dept_cache.clear()
-    _dept_cache_time.clear()
+    with _registry_lock:
+        _dept_cache.clear()
     for path in CACHE_DIR.glob(f"*{Period.LATEST.value}*"):
         path.unlink(missing_ok=True)
+
+
+@dataclass(frozen=True)
+class RecordSpan:
+    """How far back a station's observations run. Present or absent as a whole — the index is
+    built without it by `build_station_index.py --fast`, never with half of it."""
+
+    first_year: int
+    last_year: int
+
+    def __post_init__(self) -> None:
+        if self.first_year > self.last_year:
+            raise ValueError(f"record span ends before it starts: {self.first_year}–{self.last_year}")
+
+    @property
+    def n_years(self) -> int:
+        return self.last_year - self.first_year + 1
+
+
+@dataclass(frozen=True)
+class IndexedStation:
+    """One entry of the pre-built station index: where a station is, and how long it has run."""
+
+    station_id: int
+    name: str
+    dept: str
+    lat: float
+    lon: float
+    altitude: int
+    span: RecordSpan | None
+
+
+def _indexed_station(entry: Any) -> IndexedStation | None:
+    """Read one index entry, or None if it is malformed — a stale index is not a crash.
+
+    An inverted span raises out of `RecordSpan` and is caught here with the other value errors.
+    """
+    if not isinstance(entry, dict):
+        return None
+    try:
+        first, last = entry.get("first_year"), entry.get("last_year")
+        return IndexedStation(
+            station_id=int(entry["station_id"]),
+            name=str(entry["station_name"]),
+            dept=str(entry["dept"]),
+            lat=float(entry["lat"]),
+            lon=float(entry["lon"]),
+            altitude=int(entry["altitude"]),
+            span=RecordSpan(int(first), int(last)) if first is not None and last is not None else None,
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+@lru_cache(maxsize=1)
+def station_index() -> list[IndexedStation]:
+    """The pre-built index of every station, or an empty list when it has not been generated yet.
+
+    Built by scripts/build_station_index.py and committed; the app never fetches it at runtime.
+    """
+    path = DATA_DIR / "stations.json"
+    if not path.exists():
+        return []
+    parsed = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(parsed, list):
+        return []
+    return [station for station in map(_indexed_station, parsed) if station is not None]
 
 
 def stations_from(df: pl.DataFrame) -> list[Station]:
