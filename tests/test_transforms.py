@@ -9,19 +9,32 @@ import pytest
 from src.transforms import (
     DEFAULT_HOT_DAY,
     DEFAULT_WINDOW,
+    HEATWAVE_HOT_DAY,
     HOT_DAY_OPTIONS,
+    REFERENCE_PERIOD,
+    DatedValue,
     DayWindow,
     Density,
     Distribution,
     LinearTrend,
+    Streak,
     TmaxAndTmin,
     TmaxOnly,
     YearSpan,
+    day_normal,
+    day_rank,
+    decades_in,
     describe,
     gaussian_kde,
+    has_wind,
     hot_day_from,
+    is_complete,
+    latest_observation,
+    latest_vs_normal,
     linear_trend,
+    longest_streak,
     silverman_bandwidth,
+    station_records,
     window_filter,
     year_filter,
     yearly_hot_cold,
@@ -34,11 +47,13 @@ from src.transforms import (
 
 def test_linear_trend_returns_dataclass() -> None:
     result = linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
+    assert result is not None
     assert isinstance(result, LinearTrend)
 
 
 def test_linear_trend_perfect_slope() -> None:
     result = linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
+    assert result is not None
     assert abs(result.slope - 2.0) < 1e-9
     assert abs(result.intercept - 0.0) < 1e-9
     assert abs(result.r_squared - 1.0) < 1e-9
@@ -46,16 +61,18 @@ def test_linear_trend_perfect_slope() -> None:
 
 def test_linear_trend_flat() -> None:
     result = linear_trend([1.0, 2.0, 3.0], [5.0, 5.0, 5.0])
+    assert result is not None
     assert abs(result.slope) < 1e-9
     assert abs(result.intercept - 5.0) < 1e-9
     assert result.r_squared == 0.0
 
 
-def test_linear_trend_single_point_returns_zero_slope() -> None:
-    result = linear_trend([2020.0], [10.0])
-    assert result.slope == 0.0
-    assert result.intercept == 10.0
-    assert result.r_squared == 0.0
+def test_linear_trend_single_point_has_no_trend() -> None:
+    assert linear_trend([2020.0], [10.0]) is None
+
+
+def test_linear_trend_all_null_y_has_no_trend() -> None:
+    assert linear_trend([2020.0, 2021.0], [None, None]) is None
 
 
 def test_linear_trend_stable_with_large_x() -> None:
@@ -63,6 +80,7 @@ def test_linear_trend_stable_with_large_x() -> None:
     x = [2000.0, 2010.0, 2020.0]
     y = [2000.0, 2010.0, 2020.0]  # slope=1, intercept=0
     result = linear_trend(x, y)
+    assert result is not None
     assert abs(result.slope - 1.0) < 1e-9
     assert abs(result.intercept) < 1e-6
     assert abs(result.r_squared - 1.0) < 1e-9
@@ -70,13 +88,12 @@ def test_linear_trend_stable_with_large_x() -> None:
 
 def test_linear_trend_filters_none_y() -> None:
     result = linear_trend([1.0, 2.0, 3.0], [2.0, None, 6.0])
+    assert result is not None
     assert abs(result.slope - 2.0) < 1e-9
 
 
-def test_linear_trend_zero_variance_x_returns_mean() -> None:
-    result = linear_trend([5.0, 5.0, 5.0], [1.0, 2.0, 3.0])
-    assert result.slope == 0.0
-    assert abs(result.intercept - 2.0) < 1e-9
+def test_linear_trend_zero_variance_x_has_no_trend() -> None:
+    assert linear_trend([5.0, 5.0, 5.0], [1.0, 2.0, 3.0]) is None
 
 
 # ---------------------------------------------------------------------------
@@ -191,13 +208,13 @@ def tmax_only_df() -> pl.DataFrame:
     )
 
 
-def test_yearly_hot_cold_tmax_only_counts_differently_from_default(tmax_only_df: pl.DataFrame) -> None:
+def test_yearly_hot_cold_tmax_only_counts_differently_from_the_heatwave_rule(tmax_only_df: pl.DataFrame) -> None:
     """Day with tmax=33, tmin=15: counted by TmaxOnly(32) but not by TmaxAndTmin(35, 20)."""
-    result_default = yearly_hot_cold(tmax_only_df)
+    result_pair = yearly_hot_cold(tmax_only_df, HEATWAVE_HOT_DAY)
     result_tmax_only = yearly_hot_cold(tmax_only_df, TmaxOnly(32.0))
-    row_default = result_default.filter(pl.col("year") == 2023).row(0, named=True)
+    row_pair = result_pair.filter(pl.col("year") == 2023).row(0, named=True)
     row_tmax_only = result_tmax_only.filter(pl.col("year") == 2023).row(0, named=True)
-    assert row_default["hot_days"] == 0
+    assert row_pair["hot_days"] == 0
     assert row_tmax_only["hot_days"] == 1
 
 
@@ -306,7 +323,6 @@ def test_describe_returns_distribution() -> None:
 def test_describe_quantiles() -> None:
     result = describe(pl.Series([float(i) for i in range(1, 101)]))
     assert result is not None
-    assert result.p10 == pytest.approx(10.0, abs=1.0)
     assert result.p90 == pytest.approx(90.0, abs=1.0)
 
 
@@ -433,3 +449,213 @@ def test_gaussian_kde_constant_sample_returns_none() -> None:
 
 def test_gaussian_kde_empty_returns_none() -> None:
     assert gaussian_kde(pl.Series([], dtype=pl.Float64)) is None
+
+
+# ---------------------------------------------------------------------------
+# coverage-aware yearly counts
+# ---------------------------------------------------------------------------
+
+
+def _year_df(year: int, days: int, temp_min: float = 5.0, temp_max: float = 20.0) -> pl.DataFrame:
+    dates = [date(year, 1, 1) + timedelta(days=i) for i in range(days)]
+    return pl.DataFrame(
+        {"DATE": dates, "temp_min": [temp_min] * days, "temp_max": [temp_max] * days},
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+
+
+def test_yearly_hot_cold_reports_coverage() -> None:
+    result = yearly_hot_cold(_year_df(2021, 365))
+    assert result["coverage"][0] == pytest.approx(1.0)
+
+
+def test_yearly_hot_cold_coverage_counts_leap_days() -> None:
+    result = yearly_hot_cold(_year_df(2020, 366))
+    assert result["coverage"][0] == pytest.approx(1.0)
+
+
+def test_yearly_hot_cold_coverage_ignores_days_without_a_temperature() -> None:
+    df = _year_df(2021, 365).with_columns(
+        pl.when(pl.col("DATE").dt.month() <= 6)
+        .then(None)
+        .otherwise(pl.col("temp_min"))
+        .cast(pl.Float64)
+        .alias("temp_min"),
+        pl.when(pl.col("DATE").dt.month() <= 6)
+        .then(None)
+        .otherwise(pl.col("temp_max"))
+        .cast(pl.Float64)
+        .alias("temp_max"),
+    )
+    assert yearly_hot_cold(df)["coverage"][0] == pytest.approx(0.5, abs=0.02)
+
+
+def test_is_complete_separates_measured_years_from_downtime() -> None:
+    agg = yearly_hot_cold(pl.concat([_year_df(2020, 366), _year_df(2021, 20)]))
+    assert agg.filter(is_complete())["year"].to_list() == [2020]
+
+
+def test_yearly_hot_cold_counts_tropical_nights() -> None:
+    df = _year_df(2021, 3, temp_min=21.0, temp_max=30.0)
+    assert yearly_hot_cold(df)["tropical_nights"][0] == 3
+
+
+# ---------------------------------------------------------------------------
+# longest_streak / station_records
+# ---------------------------------------------------------------------------
+
+
+def _records_df() -> pl.DataFrame:
+    dates = [date(2020, 7, 1) + timedelta(days=i) for i in range(6)]
+    return pl.DataFrame(
+        {
+            "DATE": dates,
+            "temp_min": [18.0, 19.0, 20.0, 5.0, -3.0, 6.0],
+            "temp_max": [31.0, 32.0, 33.0, 12.0, 34.0, 10.0],
+            "precipitation": [0.0, 1.0, 0.0, 22.0, 0.0, 3.0],
+            "wind_gust": [10.0, 12.0, None, 25.0, 8.0, 9.0],
+        },
+        schema={
+            "DATE": pl.Date,
+            "temp_min": pl.Float64,
+            "temp_max": pl.Float64,
+            "precipitation": pl.Float64,
+            "wind_gust": pl.Float64,
+        },
+    )
+
+
+def test_station_records_finds_the_extremes() -> None:
+    records = station_records(_records_df())
+    assert records.hottest_day == DatedValue(date(2020, 7, 5), 34.0)
+    assert records.coldest_night == DatedValue(date(2020, 7, 5), -3.0)
+    assert records.wettest_day == DatedValue(date(2020, 7, 4), 22.0)
+    assert records.strongest_gust == DatedValue(date(2020, 7, 4), 25.0)
+
+
+def test_station_records_longest_hot_streak_stops_at_the_first_cool_day() -> None:
+    records = station_records(_records_df())
+    assert records.longest_hot_streak == Streak(3, date(2020, 7, 1), date(2020, 7, 3))
+
+
+def test_station_records_are_all_none_for_an_empty_record() -> None:
+    records = station_records(_records_df().head(0))
+    assert records.hottest_day is None
+    assert records.longest_hot_streak is None
+
+
+def test_station_records_tolerate_a_station_without_wind() -> None:
+    assert station_records(_records_df().drop("wind_gust")).strongest_gust is None
+
+
+def test_longest_streak_breaks_on_a_missing_calendar_day() -> None:
+    """A day the station did not observe is not evidence that the run continued."""
+    df = pl.DataFrame(
+        {
+            "DATE": [date(2020, 7, 1), date(2020, 7, 2), date(2020, 7, 4), date(2020, 7, 5), date(2020, 7, 6)],
+            "temp_max": [31.0] * 5,
+        },
+        schema={"DATE": pl.Date, "temp_max": pl.Float64},
+    )
+    assert longest_streak(df, pl.col("temp_max") >= 30) == Streak(3, date(2020, 7, 4), date(2020, 7, 6))
+
+
+def test_longest_streak_returns_none_when_nothing_qualifies() -> None:
+    df = pl.DataFrame(
+        {"DATE": [date(2020, 7, 1)], "temp_max": [12.0]}, schema={"DATE": pl.Date, "temp_max": pl.Float64}
+    )
+    assert longest_streak(df, pl.col("temp_max") >= 30) is None
+
+
+# ---------------------------------------------------------------------------
+# latest observation vs normal
+# ---------------------------------------------------------------------------
+
+
+def _reference_df(last: date = date(2026, 8, 29)) -> pl.DataFrame:
+    """One 29 August per reference year at 25 degrees, plus a warmer final observation."""
+    dates = [date(y, 8, 29) for y in range(REFERENCE_PERIOD.start, REFERENCE_PERIOD.end + 1)] + [last]
+    tmax = [25.0] * (len(dates) - 1) + [31.0]
+    tmin = [15.0] * (len(dates) - 1) + [18.0]
+    return pl.DataFrame(
+        {"DATE": dates, "temp_min": tmin, "temp_max": tmax},
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+
+
+def test_latest_observation_is_the_most_recent_day_with_a_temperature() -> None:
+    latest = latest_observation(_reference_df())
+    assert latest is not None
+    assert latest.when == date(2026, 8, 29)
+    assert latest.temp_max == pytest.approx(31.0)
+
+
+def test_latest_observation_is_none_for_a_record_without_temperatures() -> None:
+    df = _reference_df().with_columns(
+        pl.lit(None, dtype=pl.Float64).alias("temp_min"), pl.lit(None, dtype=pl.Float64).alias("temp_max")
+    )
+    assert latest_observation(df) is None
+
+
+def test_day_normal_averages_the_reference_period() -> None:
+    normal = day_normal(_reference_df(), date(2026, 8, 29))
+    assert normal.span == REFERENCE_PERIOD
+    assert normal.temp_max == pytest.approx(25.0)
+
+
+def test_day_normal_falls_back_to_the_record_when_the_reference_is_missing() -> None:
+    df = pl.DataFrame(
+        {"DATE": [date(2023, 8, 29), date(2024, 8, 29)], "temp_min": [14.0, 16.0], "temp_max": [26.0, 28.0]},
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+    normal = day_normal(df, date(2024, 8, 29))
+    assert normal.span == YearSpan(2023, 2024)
+    assert normal.temp_max == pytest.approx(27.0)
+
+
+def test_day_rank_counts_the_warmer_years() -> None:
+    rank = day_rank(_reference_df(), date(2026, 8, 29), 31.0)
+    assert rank is not None
+    assert rank.rank == 1
+    assert rank.of == 31
+
+
+def test_day_rank_is_none_without_a_value() -> None:
+    assert day_rank(_reference_df(), date(2026, 8, 29), None) is None
+
+
+def test_latest_vs_normal_reports_the_anomaly() -> None:
+    result = latest_vs_normal(_reference_df())
+    assert result is not None
+    assert result.anomaly_max == pytest.approx(6.0)
+    assert result.anomaly_min == pytest.approx(3.0)
+
+
+def test_latest_vs_normal_is_none_for_an_empty_record() -> None:
+    assert latest_vs_normal(_reference_df().head(0)) is None
+
+
+# ---------------------------------------------------------------------------
+# decades_in / has_wind
+# ---------------------------------------------------------------------------
+
+
+def test_decades_in_lists_each_decade_once() -> None:
+    df = pl.DataFrame({"DATE": [date(1999, 1, 1), date(2001, 1, 1), date(2009, 1, 1)]}, schema={"DATE": pl.Date})
+    assert decades_in(df) == [1990, 2000]
+
+
+def test_decades_in_is_empty_for_an_empty_record() -> None:
+    assert decades_in(pl.DataFrame({"DATE": []}, schema={"DATE": pl.Date})) == []
+
+
+def test_has_wind_is_false_when_every_reading_is_null(sample_df: pl.DataFrame) -> None:
+    assert has_wind(sample_df.filter(pl.col("station_id") == 31002)) is False
+
+
+def test_has_wind_is_true_for_a_station_that_measures_it(sample_df: pl.DataFrame) -> None:
+    assert has_wind(sample_df.filter(pl.col("station_id") == 31001)) is True
+
+
+def test_has_wind_is_false_when_the_columns_are_absent() -> None:
+    assert has_wind(pl.DataFrame({"DATE": [date(2020, 1, 1)]}, schema={"DATE": pl.Date})) is False

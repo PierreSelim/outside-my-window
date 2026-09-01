@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+import time
+from datetime import date, timedelta
 
 import plotly.graph_objects as go
 import polars as pl
@@ -16,7 +17,15 @@ from src.charts import (
     temperature_figure,
     wind_figure,
 )
-from src.transforms import TmaxOnly, linear_trend
+from src.data_loader import Granularity
+from src.transforms import TmaxOnly
+
+
+def yearly_fig(df: pl.DataFrame, station: str = "TOULOUSE", **kwargs: object) -> go.Figure:
+    """hot_cold_yearly_figure with the coverage guard off — these fixtures are a handful of days."""
+    kwargs.setdefault("min_coverage", 0.0)
+    return hot_cold_yearly_figure(df, station, **kwargs)  # type: ignore[arg-type]
+
 
 # ---------------------------------------------------------------------------
 # temperature_figure
@@ -87,16 +96,32 @@ def test_temperature_figure_no_legend_entry_without_hot_days(sample_df: pl.DataF
     assert not any("hot day" in name.lower() for name in trace_names)
 
 
-def test_temperature_figure_multiple_hot_days_add_multiple_shapes(sample_df: pl.DataFrame) -> None:
+def test_temperature_figure_merges_consecutive_hot_days_into_one_band(sample_df: pl.DataFrame) -> None:
+    """A heatwave is one block, not five stripes — and it keeps the shape count bounded."""
     df = sample_df.with_columns(
         [
             pl.lit(21.0).cast(pl.Float64).alias("temp_min"),
             pl.lit(36.0).cast(pl.Float64).alias("temp_max"),
         ]
     )
-    toulouse = df.filter(pl.col("station_id") == 31001)  # 3 rows → 3 hot days
+    toulouse = df.filter(pl.col("station_id") == 31001)  # 3 consecutive hot days
     fig = temperature_figure(toulouse, "TOULOUSE")
-    assert len(fig.layout.shapes) == 3
+    assert len(fig.layout.shapes) == 1
+    assert fig.layout.shapes[0].x0 == date(2020, 1, 1)
+    assert fig.layout.shapes[0].x1 == date(2020, 1, 4)
+
+
+def test_temperature_figure_separates_hot_days_that_are_not_consecutive(sample_df: pl.DataFrame) -> None:
+    df = sample_df.filter(pl.col("station_id") == 31001).with_columns(
+        pl.when(pl.col("DATE") == date(2020, 1, 2))
+        .then(pl.lit(10.0))
+        .otherwise(pl.lit(36.0))
+        .cast(pl.Float64)
+        .alias("temp_max"),
+        pl.lit(21.0).cast(pl.Float64).alias("temp_min"),
+    )
+    fig = temperature_figure(df, "TOULOUSE")
+    assert len(fig.layout.shapes) == 2
 
 
 # ---------------------------------------------------------------------------
@@ -176,26 +201,46 @@ def test_empty_figure_axes_hidden() -> None:
 
 
 def test_hot_cold_yearly_figure_returns_figure(sample_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE")
+    fig = yearly_fig(sample_df, "TOULOUSE")
     assert isinstance(fig, go.Figure)
 
 
-def test_hot_cold_yearly_figure_has_two_line_traces(sample_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE")
-    assert len(fig.data) == 2
+def test_hot_cold_yearly_figure_has_three_line_traces(sample_df: pl.DataFrame) -> None:
+    fig = yearly_fig(sample_df, "TOULOUSE")
+    assert len(fig.data) == 3  # hot days, tropical nights, frost days
     assert all(isinstance(t, go.Scatter) for t in fig.data)
 
 
+def test_hot_cold_yearly_figure_counts_tropical_nights() -> None:
+    df = pl.DataFrame(
+        {
+            "DATE": [date(2020, 7, 1), date(2020, 7, 2)],
+            "temp_min": [21.0, 12.0],
+            "temp_max": [28.0, 24.0],
+        },
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+    fig = yearly_fig(df, "TOULOUSE")
+    tropical = next(t for t in fig.data if "tropical" in t.name.lower())
+    assert sum(v for v in tropical.y if v is not None) == 1
+
+
+def test_hot_cold_yearly_figure_counts_are_drawn_straight() -> None:
+    # Annual counts are integers on a discrete axis: a spline invents values between them.
+    fig = yearly_fig(sample_year_df(), "TOULOUSE")
+    assert all(t.line.shape is None for t in fig.data)
+
+
 def test_hot_cold_yearly_figure_title_contains_station(sample_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE")
+    fig = yearly_fig(sample_df, "TOULOUSE")
     assert "TOULOUSE" in fig.layout.title.text
 
 
 def test_hot_cold_yearly_figure_counts_cold_days(sample_df: pl.DataFrame) -> None:
     """sample_df has temp_min = [-1.0, 0.5, 2.0, -2.0, 1.0] — 2 negative values in year 2020."""
     df = sample_df.filter(pl.col("DATE").dt.year() == 2020)
-    fig = hot_cold_yearly_figure(df, "TOULOUSE")
-    cold_trace = next(t for t in fig.data if "cold" in t.name.lower())
+    fig = yearly_fig(df, "TOULOUSE")
+    cold_trace = next(t for t in fig.data if "frost" in t.name.lower())
     total_cold = sum(cold_trace.y)
     assert total_cold == 2  # -1.0 and -2.0
 
@@ -218,25 +263,25 @@ def test_hot_cold_yearly_figure_counts_hot_days(sample_df: pl.DataFrame) -> None
             .alias("temp_max"),
         ]
     )
-    fig = hot_cold_yearly_figure(df, "TOULOUSE")
+    fig = yearly_fig(df, "TOULOUSE")
     hot_trace = next(t for t in fig.data if "hot" in t.name.lower())
     assert sum(hot_trace.y) == 1
 
 
 def test_hot_cold_yearly_figure_no_trend_by_default(sample_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE")
-    assert len(fig.data) == 2
+    fig = yearly_fig(sample_df, "TOULOUSE")
+    assert len(fig.data) == 3
 
 
-def test_hot_cold_yearly_figure_trend_adds_two_traces(multi_decade_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(multi_decade_df, "TOULOUSE", show_trend=True)
-    assert len(fig.data) == 4
+def test_hot_cold_yearly_figure_trend_adds_one_trace_per_series(multi_decade_df: pl.DataFrame) -> None:
+    fig = yearly_fig(multi_decade_df, "TOULOUSE", show_trend=True)
+    assert len(fig.data) == 6
     trend_traces = [t for t in fig.data if "trend" in t.name.lower()]
-    assert len(trend_traces) == 2
+    assert len(trend_traces) == 3
 
 
 def test_hot_cold_yearly_figure_trend_traces_are_dashed_lines(multi_decade_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(multi_decade_df, "TOULOUSE", show_trend=True)
+    fig = yearly_fig(multi_decade_df, "TOULOUSE", show_trend=True)
     for trace in fig.data:
         if "trend" in trace.name.lower():
             assert trace.line.dash == "dash"
@@ -244,51 +289,15 @@ def test_hot_cold_yearly_figure_trend_traces_are_dashed_lines(multi_decade_df: p
 
 
 def test_hot_cold_yearly_figure_trend_same_x_as_data(multi_decade_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(multi_decade_df, "TOULOUSE", show_trend=True)
+    fig = yearly_fig(multi_decade_df, "TOULOUSE", show_trend=True)
     data_x = fig.data[0].x
     for trace in fig.data:
         if "trend" in trace.name.lower():
             assert list(trace.x) == list(data_x)
 
 
-# ---------------------------------------------------------------------------
-# _linear_trend
-# ---------------------------------------------------------------------------
-
-
-def test_linear_trend_perfect_slope() -> None:
-    result = linear_trend([1.0, 2.0, 3.0], [2.0, 4.0, 6.0])
-    assert abs(result.slope - 2.0) < 1e-9
-    assert abs(result.intercept - 0.0) < 1e-9
-    assert abs(result.r_squared - 1.0) < 1e-9
-
-
-def test_linear_trend_flat() -> None:
-    result = linear_trend([1.0, 2.0, 3.0], [5.0, 5.0, 5.0])
-    assert abs(result.slope) < 1e-9
-    assert abs(result.intercept - 5.0) < 1e-9
-    assert result.r_squared == 0.0
-
-
-def test_linear_trend_single_point_returns_zero_slope() -> None:
-    result = linear_trend([2020.0], [10.0])
-    assert result.slope == 0.0
-    assert result.intercept == 10.0
-    assert result.r_squared == 0.0
-
-
-def test_linear_trend_stable_with_large_x() -> None:
-    """Centered OLS must not lose precision for year-scale x values."""
-    x = [2000.0, 2010.0, 2020.0]
-    y = [2000.0, 2010.0, 2020.0]  # slope=1, intercept=0
-    result = linear_trend(x, y)
-    assert abs(result.slope - 1.0) < 1e-9
-    assert abs(result.intercept) < 1e-6
-    assert abs(result.r_squared - 1.0) < 1e-9
-
-
 def test_hot_cold_yearly_figure_x_axis_is_years(sample_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE")
+    fig = yearly_fig(sample_df, "TOULOUSE")
     for trace in fig.data:
         assert all(isinstance(y, int) for y in trace.x)
 
@@ -470,54 +479,54 @@ def two_year_df() -> pl.DataFrame:
 
 def test_hot_cold_yearly_figure_current_year_none_gives_two_traces(sample_df: pl.DataFrame) -> None:
     """Explicit current_year=None: provisional path off, only 2 solid traces returned."""
-    fig = hot_cold_yearly_figure(sample_df, "TOULOUSE", current_year=None)
-    assert len(fig.data) == 2
+    fig = yearly_fig(sample_df, "TOULOUSE", current_year=None)
+    assert len(fig.data) == 3
 
 
 def test_hot_cold_yearly_figure_current_year_adds_dotted_traces(two_year_df: pl.DataFrame) -> None:
-    """With current_year set and data for that year, exactly two dotted connector traces are added."""
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    """With current_year set and data for that year, one dotted connector per counted series."""
+    fig = yearly_fig(two_year_df, "STATION", current_year=2020)
     dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
-    assert len(dot_traces) == 2
+    assert len(dot_traces) == 3
 
 
 def test_hot_cold_yearly_figure_total_traces_with_current_year(two_year_df: pl.DataFrame) -> None:
-    """2 solid + 2 dotted = 4 traces total when current_year is set and present in the data."""
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
-    assert len(fig.data) == 4
+    """3 solid + 3 dotted when current_year is set and present in the data."""
+    fig = yearly_fig(two_year_df, "STATION", current_year=2020)
+    assert len(fig.data) == 6
 
 
 def test_hot_cold_yearly_figure_dotted_traces_have_open_circle_marker(two_year_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    fig = yearly_fig(two_year_df, "STATION", current_year=2020)
     dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
     for trace in dot_traces:
         assert trace.marker.symbol == "circle-open"
 
 
 def test_hot_cold_yearly_figure_dotted_traces_not_in_legend(two_year_df: pl.DataFrame) -> None:
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    fig = yearly_fig(two_year_df, "STATION", current_year=2020)
     dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
     for trace in dot_traces:
         assert trace.showlegend is False
 
 
 def test_hot_cold_yearly_figure_solid_hot_trace_excludes_current_year(two_year_df: pl.DataFrame) -> None:
-    """The solid hot trace y must cover only complete years — current year must not appear in x."""
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
+    """The current year carries no solid value — it is drawn only as the provisional point."""
+    fig = yearly_fig(two_year_df, "STATION", current_year=2020)
     solid_hot = next(t for t in fig.data if "hot" in t.name.lower() and getattr(t.line, "dash", None) != "dot")
-    assert 2020 not in list(solid_hot.x)
+    assert solid_hot.y[list(solid_hot.x).index(2020)] is None
 
 
 def test_hot_cold_yearly_figure_solid_cold_trace_excludes_current_year(two_year_df: pl.DataFrame) -> None:
-    """The solid cold trace y must cover only complete years — current year must not appear in x."""
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2020)
-    solid_cold = next(t for t in fig.data if "cold" in t.name.lower() and getattr(t.line, "dash", None) != "dot")
-    assert 2020 not in list(solid_cold.x)
+    """The frost series follows the same provisional rule as the hot one."""
+    fig = yearly_fig(two_year_df, "STATION", current_year=2020)
+    solid = next(t for t in fig.data if "frost" in t.name.lower() and getattr(t.line, "dash", None) != "dot")
+    assert solid.y[list(solid.x).index(2020)] is None
 
 
 def test_hot_cold_yearly_figure_no_dotted_traces_when_current_year_absent(two_year_df: pl.DataFrame) -> None:
     """If current_year has no matching row in the aggregated data, no dotted trace is added."""
-    fig = hot_cold_yearly_figure(two_year_df, "STATION", current_year=2025)
+    fig = yearly_fig(two_year_df, "STATION", current_year=2025)
     dot_traces = [t for t in fig.data if getattr(t.line, "dash", None) == "dot"]
     assert len(dot_traces) == 0
 
@@ -538,7 +547,7 @@ def test_hot_cold_yearly_figure_hot_trace_name_contains_definition_label() -> No
         },
         schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
     )
-    fig = hot_cold_yearly_figure(df, "STATION", definition=definition)
+    fig = yearly_fig(df, "STATION", definition=definition)
     hot_trace = next(t for t in fig.data if "hot" in t.name.lower())
     assert definition.label in hot_trace.name
 
@@ -605,3 +614,96 @@ def test_density_comparison_figure_constant_period_returns_placeholder() -> None
     """A zero-variance sample has no bandwidth and therefore no density."""
     fig = density_comparison_figure(pl.Series([20.0] * 10), _SERIES_B, "A", "B", "Title")
     assert len(fig.data) == 0
+
+
+def sample_year_df(years: tuple[int, ...] = (2020, 2021), days: int = 366) -> pl.DataFrame:
+    """A fully observed record: `days` consecutive days from 1 January of each year."""
+    dates = [date(y, 1, 1) + timedelta(days=i) for y in years for i in range(days)]
+    return pl.DataFrame(
+        {"DATE": dates, "temp_min": [5.0] * len(dates), "temp_max": [20.0] * len(dates)},
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+
+
+def test_hot_cold_yearly_figure_excludes_years_the_station_barely_observed() -> None:
+    """A year of 20 observed days is a measure of downtime, not of a cool summer."""
+    full = sample_year_df((2020,))
+    sparse = pl.DataFrame(
+        {
+            "DATE": [date(2021, 1, 1) + timedelta(days=i) for i in range(20)],
+            "temp_min": [5.0] * 20,
+            "temp_max": [20.0] * 20,
+        },
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+    fig = hot_cold_yearly_figure(pl.concat([full, sparse]), "TOULOUSE")
+    hot = next(t for t in fig.data if "hot" in t.name.lower())
+    assert hot.y[list(hot.x).index(2021)] is None
+    assert hot.y[list(hot.x).index(2020)] is not None
+
+
+def test_hot_cold_yearly_figure_marks_the_excluded_years() -> None:
+    sparse = pl.DataFrame(
+        {"DATE": [date(2021, 1, 1)], "temp_min": [5.0], "temp_max": [20.0]},
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+    fig = hot_cold_yearly_figure(pl.concat([sample_year_df((2020,)), sparse]), "TOULOUSE")
+    assert len(fig.layout.shapes) == 1
+    assert any("excluded" in (t.name or "") for t in fig.data)
+
+
+def test_hot_cold_yearly_figure_trend_ignores_the_excluded_years() -> None:
+    """The regression must run on the same population as the solid line."""
+    fig = hot_cold_yearly_figure(sample_year_df((2020, 2021, 2022)), "TOULOUSE", show_trend=True)
+    trend = next(t for t in fig.data if "trend" in (t.name or "").lower())
+    assert list(trend.x) == [2020, 2021, 2022]
+
+
+def test_temperature_figure_keeps_the_gap_in_a_broken_record(sample_df: pl.DataFrame) -> None:
+    """A missing day is a hole in the line, not a straight segment drawn across it."""
+    df = sample_df.filter(pl.col("station_id") == 31001).with_columns(
+        pl.when(pl.col("DATE") == date(2020, 1, 2))
+        .then(None)
+        .otherwise(pl.col("temp_max"))
+        .cast(pl.Float64)
+        .alias("temp_max")
+    )
+    fig = temperature_figure(df, "TOULOUSE")
+    max_trace = next(t for t in fig.data if t.name == "Max")
+    assert len(max_trace.y) == 3
+    assert max_trace.y[1] is None
+
+
+def test_precipitation_figure_labels_the_accumulation_period(sample_df: pl.DataFrame) -> None:
+    daily = precipitation_figure(sample_df, "TOULOUSE", Granularity.DAY)
+    monthly = precipitation_figure(sample_df, "TOULOUSE", Granularity.MONTH)
+    assert daily.layout.yaxis.title.text == "mm"
+    assert monthly.layout.yaxis.title.text == "mm/month"
+
+
+def test_decade_figure_hides_tmin_behind_the_legend() -> None:
+    fig = monthly_avg_temp_by_decade_figure(sample_year_df((2000, 2010)), "TOULOUSE")
+    tmin = [t for t in fig.data if "Tmin" in t.name]
+    assert tmin and all(t.visible == "legendonly" for t in tmin)
+
+
+def test_decade_figure_draws_only_the_selected_decades() -> None:
+    df = sample_year_df((2000, 2010, 2020))
+    fig = monthly_avg_temp_by_decade_figure(df, "TOULOUSE", selected=[2000, 2020])
+    labels = {t.name.split()[0] for t in fig.data}
+    assert labels == {"2000s", "2020s"}
+
+
+def test_temperature_figure_stays_fast_with_many_hot_days() -> None:
+    """Shapes are assigned in one call: `add_vrect` per day made this quadratic (~130 s)."""
+    days = 20 * 365
+    dates = [date(2006, 1, 1) + timedelta(days=i) for i in range(days)]
+    df = pl.DataFrame(
+        {"DATE": dates, "temp_min": [18.0] * days, "temp_max": [31.0 if i % 3 else 12.0 for i in range(days)]},
+        schema={"DATE": pl.Date, "temp_min": pl.Float64, "temp_max": pl.Float64},
+    )
+    start = time.perf_counter()
+    fig = temperature_figure(df, "TOULOUSE")
+    elapsed = time.perf_counter() - start
+    assert len(fig.layout.shapes) > 1000
+    assert elapsed < 5.0
