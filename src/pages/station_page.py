@@ -55,7 +55,7 @@ from src.transforms import (
 )
 
 _DEFAULT_YEAR_WINDOW: int = 20
-_COMPARISON_SPAN: int = 30
+_WMO_NORMAL: YearSpan = YearSpan(1991, 2020)  # WMO standard climate normal
 _NO_DATA = "No data available"
 _COMPARISON_TAB = "comparison"
 _FALLBACK_YEARS: YearSpan = YearSpan(1950, 2026)
@@ -184,6 +184,15 @@ def _record_years(df: pl.DataFrame | None) -> YearSpan:
     return _FALLBACK_YEARS
 
 
+def _clamp(span: YearSpan, record: YearSpan) -> YearSpan:
+    """Defaults outside a short record would show empty periods; pull them onto the nearest covered year."""
+
+    def inside(year: int) -> int:
+        return min(max(year, record.start), record.end)
+
+    return YearSpan.of(inside(span.start), inside(span.end))
+
+
 def _mark_years(record: YearSpan, step: int) -> range:
     """Round years inside the record at `step` intervals, starting on the first multiple of `step`."""
     return range(record.start + (-record.start) % step, record.end + 1, step)
@@ -254,8 +263,9 @@ def layout(search: str = "") -> html.Div:
     if initial_station not in valid_ids:
         initial_station = stations[0].station_id if stations else None
 
-    span_a = YearSpan.of(year_min, min(year_max, year_min + _COMPARISON_SPAN - 1))
-    span_b = YearSpan.of(max(year_min, year_max - _COMPARISON_SPAN + 1), year_max)
+    this_year = date.today().year
+    span_a = _clamp(_WMO_NORMAL, record)
+    span_b = _clamp(YearSpan(this_year, this_year), record)
     station_options = [{"label": s.name, "value": s.station_id} for s in stations]
     dept_label = f"{DEPT_NAMES.get(dept, dept)} ({dept})" if dept else ""
 
