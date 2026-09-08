@@ -476,10 +476,25 @@ def test_fetch_does_not_check_staleness_for_modern(tmp_path: Path) -> None:
 
 
 def test_download_returns_none_on_http_error() -> None:
-    with patch("src.data_loader.requests.get") as mock_get:
+    index = {"31": {Period.LATEST.value: "abc-123"}}
+    with patch("src.data_loader._RESOURCE_INDEX", index), patch("src.data_loader.requests.get") as mock_get:
         mock_get.return_value.status_code = 404
-        result = _download("99", Period.LATEST)
+        result = _download("31", Period.LATEST)
     assert result is None
+
+
+def test_download_writes_payload_to_cache(tmp_path: Path) -> None:
+    index = {"31": {Period.LATEST.value: "abc-123"}}
+    with (
+        patch("src.data_loader._RESOURCE_INDEX", index),
+        patch.object(dl, "CACHE_DIR", tmp_path / "cache"),
+        patch("src.data_loader.requests.get") as mock_get,
+    ):
+        mock_get.return_value.status_code = 200
+        mock_get.return_value.content = b"payload"
+        result = _download("31", Period.LATEST)
+    assert result is not None
+    assert result.read_bytes() == b"payload"
 
 
 def test_file_url_resolves_known_resource() -> None:
@@ -602,4 +617,33 @@ def test_station_index_is_empty_when_it_has_not_been_built(monkeypatch: pytest.M
     station_index.cache_clear()
     monkeypatch.setattr(dl, "DATA_DIR", tmp_path)
     assert station_index() == []
+    station_index.cache_clear()
+
+
+def test_fetch_downloads_when_nothing_is_cached(tmp_path: Path) -> None:
+    with (
+        patch.object(dl, "CACHE_DIR", tmp_path),
+        patch("src.data_loader._download", return_value=tmp_path / "fresh.csv.gz") as mock_dl,
+    ):
+        result = _fetch("31", Period.HISTORICAL)
+    mock_dl.assert_called_once_with("31", Period.HISTORICAL)
+    assert result == tmp_path / "fresh.csv.gz"
+
+
+def test_clear_cache_removes_latest_files_only(tmp_path: Path, empty_dept_cache: None) -> None:
+    latest = tmp_path / f"Q_31_{Period.LATEST.value}_RR-T-Vent.csv.gz"
+    historical = tmp_path / f"Q_31_{Period.HISTORICAL.value}_RR-T-Vent.csv.gz"
+    latest.write_bytes(b"x")
+    historical.write_bytes(b"x")
+    with patch.object(dl, "CACHE_DIR", tmp_path):
+        clear_cache()
+    assert not latest.exists()
+    assert historical.exists()
+
+
+def test_station_index_is_empty_when_json_is_not_a_list(tmp_path: Path) -> None:
+    (tmp_path / "stations.json").write_text('{"31001": "TOULOUSE"}', encoding="utf-8")
+    station_index.cache_clear()
+    with patch.object(dl, "DATA_DIR", tmp_path):
+        assert station_index() == []
     station_index.cache_clear()
