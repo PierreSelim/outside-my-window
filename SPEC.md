@@ -243,8 +243,10 @@ look identical there.
 - Overlays the **probability density** of daily Tmax (first chart) and daily Tmin (second) for
   **two year ranges**, both restricted to the **same calendar window**
 - Controls, all on one row: a shared season window (`dcc.DatePickerRange`, default 1 Jun – 31 Aug)
-  and **two year boxes per period** (`dcc.Input(type="number")`, `debounce=True`; defaults: oldest
-  30 years vs newest 30 years of the record), followed by a `Record: <min>–<max>` hint
+  and **two year boxes per period** (`dcc.Input(type="number")`, `debounce=True`; defaults: Period A
+  is the **WMO standard climate normal 1991–2020** (`_WMO_NORMAL`) and Period B is the **current
+  year**, each clamped into the station's record by `_clamp` so a short record never opens on an
+  empty period), followed by a `Record: <min>–<max>` hint
 - **Typed boxes, not `RangeSlider`s**: a slider is a scrubbing control, but comparison periods are
   chosen exactly (1961–1990 vs 1991–2020). Two sliders side by side rendered their decade marks
   illegibly, and stacking them only made the unreadable control taller. `min`/`max` on the native

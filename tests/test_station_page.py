@@ -508,14 +508,30 @@ def test_layout_period_boxes_are_year_inputs(sample_df) -> None:
     assert all(isinstance(b, dcc.Input) and b.type == "number" and b.debounce for b in boxes)
 
 
+def test_layout_period_defaults_are_the_wmo_normal_and_this_year() -> None:
+    this_year = date.today().year
+    with patch("src.pages.station_page.load_department_cached", return_value=_record_df(last_year=this_year)):
+        page = layout("?dept=31&station=31001")
+    values = [_find_by_id(page, box).value for box in ("cmp-a-start", "cmp-a-end", "cmp-b-start", "cmp-b-end")]
+    assert values == [1991, 2020, this_year, this_year]
+
+
+def test_layout_period_defaults_clamp_to_a_short_record(sample_df) -> None:
+    """sample_df only covers 2020 — defaults outside it would render empty periods."""
+    with patch("src.pages.station_page.load_department_cached", return_value=sample_df):
+        page = layout("?dept=31&station=31001")
+    values = [_find_by_id(page, box).value for box in ("cmp-a-start", "cmp-a-end", "cmp-b-start", "cmp-b-end")]
+    assert values == [2020, 2020, 2020, 2020]
+
+
 # ---------------------------------------------------------------------------
 # update_station_header
 # ---------------------------------------------------------------------------
 
 
-def _record_df(station_id: int = 31001) -> pl.DataFrame:
-    """One 29 August per reference year at 25 degrees, plus a warmer 2026 observation."""
-    dates = [date(y, 8, 29) for y in range(1991, 2021)] + [date(2026, 8, 29)]
+def _record_df(station_id: int = 31001, last_year: int = 2026) -> pl.DataFrame:
+    """One 29 August per reference year at 25 degrees, plus a warmer observation in `last_year`."""
+    dates = [date(y, 8, 29) for y in range(1991, 2021)] + [date(last_year, 8, 29)]
     n = len(dates)
     return pl.DataFrame(
         {
