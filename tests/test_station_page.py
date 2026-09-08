@@ -10,6 +10,9 @@ from dash import Dash, dcc, html
 
 from src.data_loader import Granularity
 from src.pages.station_page import (
+    _streak,
+    _tone,
+    _usual_tile,
     _year_marks,
     layout,
     register_callbacks,
@@ -703,3 +706,16 @@ def test_year_marks_never_crowd_the_slider() -> None:
         assert marks, (start, end)
         assert len(marks) <= 8, (start, end, marks)
         assert all(start <= year <= end for year in marks)
+
+
+def test_tone_is_blank_without_a_value() -> None:
+    assert _tone(None) == ""
+
+
+def test_streak_without_a_streak() -> None:
+    assert _streak(None) == "—"
+
+
+def test_usual_tile_without_an_anomaly() -> None:
+    tile = _usual_tile(None, None, "maximum", "1991–2020")
+    assert "Compared with usual" in str(tile)

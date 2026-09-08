@@ -8,6 +8,8 @@ import polars as pl
 import pytest
 
 from src.charts import (
+    _add_provisional_point,
+    _consecutive_runs,
     density_comparison_figure,
     empty_figure,
     hot_cold_yearly_figure,
@@ -707,3 +709,34 @@ def test_temperature_figure_stays_fast_with_many_hot_days() -> None:
     elapsed = time.perf_counter() - start
     assert len(fig.layout.shapes) > 1000
     assert elapsed < 5.0
+
+
+# ---------------------------------------------------------------------------
+# _consecutive_runs / _add_provisional_point
+# ---------------------------------------------------------------------------
+
+
+def test_consecutive_runs_merges_adjacent_years() -> None:
+    assert _consecutive_runs([1990, 1991, 1992, 1995, 1996, 2000]) == [(1990, 1992), (1995, 1996), (2000, 2000)]
+
+
+def test_consecutive_runs_of_empty_list() -> None:
+    assert _consecutive_runs([]) == []
+
+
+def test_provisional_point_without_history_is_a_lone_marker() -> None:
+    fig = go.Figure()
+    _add_provisional_point(fig, [], [], 2026, 12, "#ff0000")
+    (trace,) = fig.data
+    assert trace.x == (2026,)
+    assert trace.y == (12,)
+    assert trace.mode == "markers"
+
+
+def test_provisional_point_connects_to_last_measured_year() -> None:
+    fig = go.Figure()
+    _add_provisional_point(fig, [2024, 2025], [8, 9], 2026, 12, "#ff0000")
+    (trace,) = fig.data
+    assert trace.x == (2025, 2026)
+    assert trace.y == (9, 12)
+    assert trace.mode == "lines+markers"

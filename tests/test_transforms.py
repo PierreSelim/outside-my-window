@@ -21,6 +21,7 @@ from src.transforms import (
     TmaxAndTmin,
     TmaxOnly,
     YearSpan,
+    _record_span,
     day_normal,
     day_rank,
     decades_in,
@@ -659,3 +660,18 @@ def test_has_wind_is_true_for_a_station_that_measures_it(sample_df: pl.DataFrame
 
 def test_has_wind_is_false_when_the_columns_are_absent() -> None:
     assert has_wind(pl.DataFrame({"DATE": [date(2020, 1, 1)]}, schema={"DATE": pl.Date})) is False
+
+
+def test_longest_streak_without_date_column() -> None:
+    df = pl.DataFrame({"temp_max": [30.0, 31.0]})
+    assert longest_streak(df, pl.col("temp_max") > 25) is None
+
+
+def test_record_span_is_none_without_dates() -> None:
+    df = pl.DataFrame({"DATE": []}, schema={"DATE": pl.Date})
+    assert _record_span(df) is None
+
+
+def test_day_rank_is_none_when_no_year_recorded_that_day() -> None:
+    df = pl.DataFrame({"DATE": [date(2020, 7, 14)], "temp_max": [30.0]})
+    assert day_rank(df, date(2020, 12, 25), 5.0) is None

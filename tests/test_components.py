@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import pytest
+from dash import Dash, dcc, html
 from dash.exceptions import PreventUpdate
 
 import src.pages.components as components
 from src.data_loader import IndexedStation
-from src.pages.components import navigate_to_station, station_href, station_search
+from src.pages.components import navigate_to_station, register_callbacks, station_href, station_search
 
 _STATIONS = [
     IndexedStation(31001, "TOULOUSE", "31", 43.6, 1.44, 152, span=None),
@@ -41,3 +42,10 @@ def test_navigate_to_station_returns_the_selected_href() -> None:
 def test_navigate_to_station_ignores_an_empty_selection() -> None:
     with pytest.raises(PreventUpdate):
         navigate_to_station(None)
+
+
+def test_register_callbacks_wires_the_search_box() -> None:
+    app = Dash(__name__)
+    app.layout = html.Div([dcc.Location(id="url"), station_search()])
+    register_callbacks(app)
+    assert app.callback_map

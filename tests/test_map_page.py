@@ -4,13 +4,13 @@ from dataclasses import replace
 
 import plotly.graph_objects as go
 import pytest
-from dash import dcc, html
+from dash import Dash, dcc, html
 from dash.exceptions import PreventUpdate
 
 import src.pages.components as components
 import src.pages.map_page as map_page
 from src.data_loader import IndexedStation, RecordSpan
-from src.pages.map_page import _map_figure, layout, on_map_click
+from src.pages.map_page import _map_figure, layout, on_map_click, register_callbacks
 from tests.conftest import find_component
 
 _SAMPLE_STATIONS = [
@@ -126,3 +126,11 @@ def test_on_map_click_empty_raises_prevent_update() -> None:
 def test_on_map_click_no_points_key_raises_prevent_update() -> None:
     with pytest.raises(PreventUpdate):
         on_map_click({"foo": "bar"})
+
+
+def test_register_callbacks_wires_the_map_click() -> None:
+    app = Dash(__name__)
+    app.layout = html.Div([dcc.Location(id="url"), layout()])
+    register_callbacks(app)
+    inputs = app.callback_map["url.href"]["inputs"]
+    assert [i["id"] for i in inputs] == ["station-map"]
